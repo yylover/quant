@@ -90,3 +90,22 @@ def timing_ma_signals(df: pd.DataFrame, fast: int = 20, slow: int = 60) -> tuple
     """
     return ma_cross_signals(df, fast=fast, slow=slow)
 
+
+def macd_trend_signals(
+    df: pd.DataFrame,
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """MACD trend-following strategy based on MACD/signal line crossover.
+
+    Buy when MACD crosses above signal; sell when MACD crosses below signal.
+    """
+    if fast >= slow:
+        raise ValueError("fast window must be smaller than slow window")
+    close = _prepare_close(df)
+    macd_ind = vbt.MACD.run(close, fast_window=fast, slow_window=slow, signal_window=signal)
+    entries = macd_ind.macd_crossed_above(macd_ind.signal)
+    exits = macd_ind.macd_crossed_below(macd_ind.signal)
+    return close, entries, exits
+
