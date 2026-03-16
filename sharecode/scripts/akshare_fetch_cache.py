@@ -32,15 +32,34 @@ def infer_etf_market(symbol: str) -> str:
 
 
 def fetch_etf_hist(symbol: str, start: str, end: str, retries: int, market: str | None = None) -> pd.DataFrame:
-    """Fetch ETF daily history via AkShare and normalize to AkShare A股格式列名."""
+    """Fetch ETF daily history via fund_etf_hist_em (东方财富).
+
+    Supports full date range and qfq adjust natively. Returns DataFrame with
+    AkShare standard Chinese column names (日期/开盘/收盘/最高/最低/成交量/成交额).
+    Falls back to fund_etf_hist_sina on repeated failure.
+    """
     last_err: Exception | None = None
+    for i in range(retries):
+        try:
+            df = ak.fund_etf_hist_em(
+                symbol=symbol,
+                period="daily",
+                start_date=start,
+                end_date=end,
+                adjust="qfq",
+            )
+            return df
+        except Exception as e:
+            last_err = e
+            time.sleep(1.5 * (i + 1))
+
+    # fallback: fund_etf_hist_sina (older API, no date range params)
     full_symbol = f"{market or infer_etf_market(symbol)}{symbol}"
     for i in range(retries):
         try:
             df = ak.fund_etf_hist_sina(symbol=full_symbol)
             if df.empty:
                 return df
-            # 标准化列名：date/close/open/high/low/volume/amount -> 中文列名，便于后续复用
             rename_map = {
                 "date": "日期",
                 "open": "开盘",
@@ -51,12 +70,9 @@ def fetch_etf_hist(symbol: str, start: str, end: str, retries: int, market: str 
                 "amount": "成交额",
             }
             df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
-            # 过滤日期区间
             if "日期" in df.columns:
                 df["日期"] = pd.to_datetime(df["日期"])
-                start_ts = pd.to_datetime(start)
-                end_ts = pd.to_datetime(end)
-                df = df[(df["日期"] >= start_ts) & (df["日期"] <= end_ts)]
+                df = df[(df["日期"] >= pd.to_datetime(start)) & (df["日期"] <= pd.to_datetime(end))]
             return df
         except Exception as e:
             last_err = e

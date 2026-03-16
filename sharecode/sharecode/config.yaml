@@ -9,8 +9,8 @@ db:
   name: quant
 
 data:
-  start: "20200101"
-  end: "20251231"
+  start: "20100101"
+  end: "20261231"
   adjust: "qfq"
   etfs:
     - { symbol: "510300", exchange: "SSE", name: "沪深300ETF", type: "etf", market: "sh" }
@@ -39,6 +39,23 @@ data:
     - { symbol: "512660", exchange: "SSE", name: "军工ETF", type: "etf", market: "sh" }
     - { symbol: "159928", exchange: "SZSE", name: "消费ETF", type: "etf", market: "sz" }
     - { symbol: "512170", exchange: "SSE", name: "医疗ETF", type: "etf", market: "sh" }
+    # 美股宽基
+    - { symbol: "513500", exchange: "SSE", name: "标普500ETF", type: "etf", market: "sh" }
+    - { symbol: "513100", exchange: "SSE", name: "纳斯达克100ETF", type: "etf", market: "sh" }
+    # 新能源
+    - { symbol: "515790", exchange: "SSE", name: "光伏ETF", type: "etf", market: "sh" }
+    - { symbol: "515030", exchange: "SSE", name: "新能源车ETF", type: "etf", market: "sh" }
+    - { symbol: "159892", exchange: "SZSE", name: "储能ETF", type: "etf", market: "sz" }
+    # 红利/防御
+    - { symbol: "510880", exchange: "SSE", name: "红利ETF", type: "etf", market: "sh" }
+    - { symbol: "515080", exchange: "SSE", name: "中证红利ETF", type: "etf", market: "sh" }
+    # 避险
+    - { symbol: "518880", exchange: "SSE", name: "黄金ETF", type: "etf", market: "sh" }
+    - { symbol: "159934", exchange: "SZSE", name: "黄金ETF深市", type: "etf", market: "sz" }
+    # 宽基补全
+    - { symbol: "560010", exchange: "SSE", name: "中证1000ETF", type: "etf", market: "sh" }
+    # 中概互联
+    - { symbol: "513050", exchange: "SSE", name: "中概互联网ETF", type: "etf", market: "sh" }
 
 strategy:
   single:

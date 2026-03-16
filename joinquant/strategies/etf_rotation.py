@@ -1,22 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-ETF 多品种动量轮动策略 v2（加入绝对动量保护）
-========================================
-核心改进（相比 v1）：
-  1. 绝对动量保护：若权益 ETF 的最高动量仍为负，全仓切至国债ETF（熊市逃顶）
-  2. 动量回看期延长至 60 日（减少噪声，更适合月度调仓）
-  3. 均线过滤保留 60 日（只有在均线上方的 ETF 才参与竞选）
+ETF 多品种动量轮动策略 v3
+==========================
+v1 问题：没有熊市保护，2015/2018 大跌时仍在权益 ETF 之间轮动，最大回撤 47.75%。
+v2 问题：绝对动量要求（MA过滤 + 正动量）双重限制过严，策略始终持有国债，从未入场。
+
+v3 核心修正：
+  - MA 过滤已经隐含趋势判断（价格 > MA60 = 中期向上），不再额外要求正动量
+  - 动量只用于排名，不用于"能否买入"的判断
+  - 没有任何权益 ETF 通过 MA 过滤 → 全仓债券（熊市保护保留）
+  - 有权益 ETF 通过 MA 过滤 → 按动量选 Top-K 等权持有
 
 策略逻辑：
-  相对动量：选池内动量最高的 Top-K ETF
-  绝对动量：若入选的权益 ETF 动量均 <= 0，视为市场整体下跌，全切国债ETF
+  每月调仓，从权益池中筛选价格在 MA60 上方的 ETF，
+  按 20 日动量排名取前 K 名等权持有；
+  若无权益 ETF 上穿 MA60，则全仓切入国债 ETF 防御。
 
 ETF 池：
     510300.XSHG  沪深300ETF   大盘价值
     510500.XSHG  中证500ETF   中盘成长
     159915.XSHE  创业板ETF    小盘成长
     512880.XSHG  证券ETF      金融弹性（2013年上市，回测不早于2014年）
-    511010.XSHG  国债ETF      避险资产（绝对动量触发时的避风港）
+    511010.XSHG  国债ETF      熊市防御仓（仅在无权益 ETF 合格时持有）
 
 适用于聚宽 JoinQuant 平台回测。
 """
@@ -31,16 +36,15 @@ def initialize(context):
         type='stock'
     )
 
-    # 权益 ETF 池（不含国债，国债作为独立避险仓）
-    g.equity_pool = [
+    g.equity_pool    = [
         '510300.XSHG',  # 沪深300ETF
         '510500.XSHG',  # 中证500ETF
         '159915.XSHE',  # 创业板ETF
         '512880.XSHG',  # 证券ETF
     ]
-    g.safe_etf       = '511010.XSHG'  # 国债ETF：绝对动量保护时全仓切入
-    g.momentum_days  = 60             # 动量回看周期（交易日）；60日=约3个月
-    g.ma_filter_days = 60             # 均线过滤周期
+    g.safe_etf       = '511010.XSHG'  # 国债ETF：无权益 ETF 合格时的防御仓
+    g.momentum_days  = 20             # 动量排名周期（短期，用于相对强弱比较）
+    g.ma_filter_days = 60             # 趋势过滤均线（中期，决定能否入场）
     g.top_k          = 2              # 每月持有权益 ETF 数量
 
     run_monthly(rebalance, monthday=1, time='open')
@@ -48,8 +52,9 @@ def initialize(context):
 
 def _calc_momentum(security, mom_days, ma_days):
     """
-    计算动量值（过去 mom_days 日收益率）并做均线过滤。
-    价格在均线下方 -> 返回 None（不参与选拔）。
+    计算动量并做均线趋势过滤。
+    价格 < MA → 返回 None（不参与排名）。
+    价格 >= MA → 返回 mom_days 日收益率（可正可负，仅用于排名）。
     """
     need = max(mom_days, ma_days) + 2
     prices = attribute_history(security, need, '1d', ['close'])
@@ -57,12 +62,13 @@ def _calc_momentum(security, mom_days, ma_days):
         return None
     close = prices['close']
     current = close.iloc[-1]
-    ma = close.iloc[-ma_days:].mean()
 
-    # 均线过滤
+    # 趋势过滤：价格须在 MA 上方才可入场
+    ma = close.iloc[-ma_days:].mean()
     if current < ma:
         return None
 
+    # 动量得分（仅排名用，不作入场门槛）
     past = close.iloc[-(mom_days + 1)]
     if past <= 0:
         return None
@@ -71,50 +77,36 @@ def _calc_momentum(security, mom_days, ma_days):
 
 def rebalance(context):
     """
-    月度调仓逻辑：
-      1. 计算权益 ETF 池各标的动量（含均线过滤）
-      2. 按相对动量选 Top-K
-      3. 绝对动量检查：若所有候选动量 <= 0，全切国债ETF
-      4. 否则等权持有 Top-K 权益ETF
+    月度调仓：
+      1. 计算各权益 ETF 动量（含 MA 过滤）
+      2. 无合格 ETF → 全仓国债（熊市防御）
+      3. 有合格 ETF → 按动量取 Top-K，等权持有
     """
-    # --- 1. 计算各权益 ETF 动量 ---
     scores = {}
     for etf in g.equity_pool:
         m = _calc_momentum(etf, g.momentum_days, g.ma_filter_days)
         if m is not None:
             scores[etf] = m
 
-    # 按动量降序排名，选 Top-K
-    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    candidates = ranked[:g.top_k]  # [(etf, momentum), ...]
-
-    # --- 2. 绝对动量保护 ---
-    # 所有候选 ETF 动量均 <= 0（或根本没有候选），视为熊市，全切国债
-    all_negative = (len(candidates) == 0 or all(m <= 0 for _, m in candidates))
-
-    if all_negative:
-        # 全仓切至国债 ETF
+    # 熊市防御：无权益 ETF 在均线上方 → 全仓国债
+    if not scores:
         target_etfs = [g.safe_etf]
-        log.info('[绝对动量触发] 权益ETF动量全负，切换至国债ETF')
+        log.info('[防御] 无权益ETF通过MA过滤，切换至国债ETF')
     else:
-        # 只保留动量为正的候选（正动量才值得持有）
-        target_etfs = [etf for etf, m in candidates if m > 0]
-        if not target_etfs:
-            target_etfs = [g.safe_etf]
+        # 按动量降序，取 Top-K（动量值可正可负，只比较相对强弱）
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        target_etfs = [etf for etf, _ in ranked[:g.top_k]]
+        log.info('持仓: {}  动量得分: {}'.format(
+            target_etfs,
+            {etf: round(m, 4) for etf, m in ranked[:g.top_k]}
+        ))
 
-    # --- 3. 调仓 ---
-    # 先平掉不在目标列表的持仓
+    # 先平掉不在目标列表的持仓，再买入目标
     for etf in list(context.portfolio.positions.keys()):
         if etf not in target_etfs:
             order_target(etf, 0)
 
-    # 等权买入目标 ETF
     weight = 0.95 / len(target_etfs)
     total_value = context.portfolio.portfolio_value
     for etf in target_etfs:
         order_target_value(etf, total_value * weight)
-
-    log.info('本月持仓: {}  动量得分: {}'.format(
-        target_etfs,
-        {etf: round(m, 4) for etf, m in ranked[:g.top_k]}
-    ))

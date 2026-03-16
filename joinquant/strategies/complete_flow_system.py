@@ -1,321 +1,418 @@
 # -*- coding: utf-8 -*-
 """
-完整交易系统 - 基于「最完善的交易流程图」10 步
-01 辨趋势 02 判方向 03 找位置 04 看信号 05 定止损 06 定仓位 07 看空间
-08 开仓 09 平仓 10 加仓
+完整交易系统 v3 - ETF 专用版
+==================================================
+基于「最完善的交易流程图」10 步，针对 ETF 特性全面重构：
+
+  01 辨趋势  02 判方向  03 找位置  04 看信号  05 定止损
+  06 定仓位  07 看空间  08 开仓    09 平仓    10 加仓
+
+v2 → v3 核心改进：
+  ① 信号（Step04）：放弃旭日东升/阴包阳（K线形态对ETF无效）
+                    → 改为「20日突破」+「MA多头排列+RSI健康区间」
+  ② 止损（Step05）：1.5×ATR → 3×ATR / 8% 固定止损（减少噪声止损）
+  ③ 出场（Step09）：去掉复杂的减半仓逻辑
+                    → 固定止损 + 从盈利高点回撤 10% 跟踪离场
+  ④ 频率：日度 → 周度（每周一检查），每年最多 ~50 次信号，
+           大幅减少交易成本侵蚀
+  ⑤ 均线周期：10/30 → 20/60（更适合 ETF 的中期趋势）
+  ⑥ 最多持仓：3 → 2（集中持仓，减少分散摩擦）
+
+ETF 池：
+  512800.XSHG 银行ETF       159208.XSHE 国防ETF
+  515880.XSHG 央企创新ETF   513120.XSHG 恒生科技ETF
+  562500.XSHG 中证A50ETF    515220.XSHG 煤炭ETF
+  159755.XSHE 游戏ETF       588460.XSHG 科创50ETF
+  588050.XSHG 科创板ETF     515400.XSHG 中证1000ETF
+  512480.XSHG 半导体ETF     159819.XSHE 人工智能ETF
+  512690.XSHG 酒ETF         159869.XSHE 新能源ETF
+  512660.XSHG 军工ETF       159928.XSHE 消费ETF
+  512170.XSHG 医疗ETF
+
 适用于聚宽 JoinQuant 平台回测。
 """
 
 
+# ======================================================
+# 初始化
+# ======================================================
 def initialize(context):
     set_benchmark('000300.XSHG')
     set_option('use_real_price', True)
     set_order_cost(
-        OrderCost(open_tax=0, close_tax=0.001, open_commission=0.0003, close_commission=0.0003, min_commission=5),
+        OrderCost(open_tax=0, close_tax=0.001,
+                  open_commission=0.0003, close_commission=0.0003,
+                  min_commission=5),
         type='stock'
     )
-    g.security = '510300.XSHG'
-    # 01 辨趋势：均线周期
-    g.short_ma = 10
-    g.long_ma = 30
-    g.trend_threshold = 0.02   # 均线偏离在此内视为震荡
-    # 04 看信号：K线形态与 RSI
-    g.rsi_period = 14
-    g.rsi_oversold = 30
-    g.rsi_overbought = 70
-    g.engulf_ratio = 0.01      # 旭日东升/阴包阳 实体比例
-    # 05 定止损：总风险 = 本金 * 1.5%
-    g.risk_pct = 0.015
-    g.stop_atr_mult = 1.5     # 止损也可用 ATR 倍数
-    g.atr_period = 14
-    # 07 看空间：至少 2:1 盈亏比
-    g.min_reward_ratio = 2.0
-    # 09 平仓：2:1 减半仓、跟踪止盈
-    g.trailing_atr_mult = 1.0  # 跟踪止盈用 ATR
-    # 10 加仓：浮盈且再次满足买点
-    g.add_only_if_profit = True
-    g.max_add_times = 1        # 最多加仓 1 次
 
-    run_daily(rebalance, time='open')
+    # ---------- ETF 池 ----------
+    g.etf_pool = [
+        '512800.XSHG',  # 银行ETF
+        '159208.XSHE',  # 国防ETF
+        '515880.XSHG',  # 央企创新ETF
+        '513120.XSHG',  # 恒生科技ETF
+        '562500.XSHG',  # 中证A50ETF
+        '515220.XSHG',  # 煤炭ETF
+        '159755.XSHE',  # 游戏ETF
+        '588460.XSHG',  # 科创50ETF
+        '588050.XSHG',  # 科创板ETF
+        '515400.XSHG',  # 中证1000ETF
+        '512480.XSHG',  # 半导体ETF
+        '159819.XSHE',  # 人工智能ETF
+        '512690.XSHG',  # 酒ETF
+        '159869.XSHE',  # 新能源ETF
+        '512660.XSHG',  # 军工ETF
+        '159928.XSHE',  # 消费ETF
+        '512170.XSHG',  # 医疗ETF
+    ]
+
+    # ---------- 01 辨趋势：均线周期 ----------
+    g.short_ma        = 20    # 短期均线（20日，约1个月）
+    g.long_ma         = 60    # 长期均线（60日，约3个月）
+    g.trend_threshold = 0.01  # 均线偏差阈值
+
+    # ---------- 04 看信号：ETF适用信号 ----------
+    g.breakout_days = 20      # 突破信号：价格突破N日最高价
+    g.rsi_period    = 14
+    g.rsi_low       = 45      # RSI健康区间下限（ETF不常跌到超卖区）
+    g.rsi_high      = 70      # RSI健康区间上限（未过热）
+
+    # ---------- 05 定止损：宽止损减少噪声止损 ----------
+    g.atr_period      = 14
+    g.stop_atr_mult   = 3.0   # 止损宽度：3×ATR
+    g.fixed_stop_pct  = 0.08  # 兜底：固定8%止损
+
+    # ---------- 06 定仓位 ----------
+    g.risk_pct      = 0.015   # 单笔最大风险：净值1.5%
+    g.max_positions = 2       # 最多同时持有2个ETF
+
+    # ---------- 07 看空间 ----------
+    g.min_reward_ratio = 1.5  # 最低盈亏比1.5:1（ETF波动幅度较小）
+
+    # ---------- 09 平仓：简化出场逻辑 ----------
+    g.trailing_pct   = 0.10   # 跟踪止盈：从持仓最高点回撤10%离场
+    g.profit_trigger = 0.05   # 达到5%浮盈后才启动跟踪止盈
+
+    # ---------- 10 加仓 ----------
+    g.max_add_times = 1
+
+    # 每个标的独立状态：{security: {'stop': float, 'highest': float, 'add_count': int}}
+    g.state = {}
+
+    # 每周一检查信号（大幅降低交易频率和手续费）
+    run_weekly(rebalance, weekday=1, time='open')
 
 
-# ---------- 01 辨趋势 ----------
+# ======================================================
+# 01 辨趋势
+# ======================================================
 def get_trend(prices):
-    """上涨/下跌/震荡"""
+    """均线多头/空头/震荡"""
     close = prices['close']
-    if len(close) < g.long_ma:
-        return None, None, None
+    if len(close) < g.long_ma + 1:
+        return None
     short = close.iloc[-g.short_ma:].mean()
     long_ = close.iloc[-g.long_ma:].mean()
     if long_ <= 0:
-        return None, None, None
-    diff_pct = (short - long_) / long_
-    if diff_pct > g.trend_threshold:
-        return 'up', short, long_
-    if diff_pct < -g.trend_threshold:
-        return 'down', short, long_
-    return 'flat', short, long_
+        return None
+    diff = (short - long_) / long_
+    if diff > g.trend_threshold:
+        return 'up'
+    if diff < -g.trend_threshold:
+        return 'down'
+    return 'flat'
 
 
-# ---------- 02 判方向 + 03 找位置 ----------
-def get_direction_and_location(prices, trend):
-    """主多/主空；顺势延续用均线/前低，转折用前低前高"""
-    high = prices['high']
-    low = prices['low']
+# ======================================================
+# 03 找位置（支撑/阻力）
+# ======================================================
+def get_support(prices, trend):
+    """用近期低点或短期均线作为支撑，计算止损参考位"""
     close = prices['close']
+    low   = prices['low']
     n = min(20, len(close) - 1)
     if n < 5:
-        return None, None
-    prev_high = high.iloc[-n-1:-1].max()
-    prev_low = low.iloc[-n-1:-1].min()
-    current = close.iloc[-1]
-    # 找位置：前高前低、均线
+        return None
     if trend == 'up':
-        direction = 'long'
-        support = prev_low
-    elif trend == 'down':
-        direction = 'short'
-        support = prev_high  # 做空时用前高作阻力
-    else:
-        direction = 'long'   # 震荡默认偏多
-        support = prev_low
-    return direction, support
+        # 上涨趋势中，近期低点是支撑
+        return low.iloc[-n-1:-1].min()
+    return close.iloc[-g.short_ma:].mean()  # 震荡时用短均线
 
 
-# ---------- 04 看信号：止跌/滞涨 ----------
-def calc_rsi(close_series, period=14):
-    delta = close_series.diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = (-delta).where(delta < 0, 0.0)
+# ======================================================
+# 04 看信号（ETF专用）
+# ======================================================
+def _calc_rsi(close_series, period):
+    delta    = close_series.diff()
+    gain     = delta.where(delta > 0, 0.0)
+    loss     = (-delta).where(delta < 0, 0.0)
     avg_gain = gain.rolling(period, min_periods=period).mean()
     avg_loss = loss.rolling(period, min_periods=period).mean()
     rs = avg_gain / avg_loss.replace(0, 1e-10)
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    return 100 - (100 / (1 + rs))
 
 
-def has_bullish_engulfing(prices):
-    """旭日东升/阳包阴：前阴后阳且后实体吞前实体"""
-    open_ = prices['open']
+def get_signal(prices):
+    """
+    ETF 适用信号（替代 K 线形态）：
+      强信号：收盘价突破近 N 日最高价（动能突破）
+      弱信号：均线多头排列 + RSI 在健康区间且上升
+    返回 (has_signal, 'strong'/'weak'/None)
+    """
     close = prices['close']
-    if len(close) < 3:
-        return False
-    c1, o1 = close.iloc[-2], open_.iloc[-2]
-    c2, o2 = close.iloc[-1], open_.iloc[-1]
-    if c1 <= o1 and c2 > o2 and c2 > o1 and o2 < c1:
-        if (c2 - o2) / (o2 or 1e-6) >= g.engulf_ratio:
-            return True
-    return False
+    high  = prices['high']
 
-
-def has_bearish_engulfing(prices):
-    """阴包阳"""
-    open_ = prices['open']
-    close = prices['close']
-    if len(close) < 3:
-        return False
-    c1, o1 = close.iloc[-2], open_.iloc[-2]
-    c2, o2 = close.iloc[-1], open_.iloc[-1]
-    if c1 >= o1 and c2 < o2 and c2 < o1 and o2 > c1:
-        if (o2 - c2) / (o2 or 1e-6) >= g.engulf_ratio:
-            return True
-    return False
-
-
-def get_signal(prices, direction):
-    """强/弱 止跌或滞涨信号；本策略只做多，看止跌"""
-    close = prices['close']
-    if len(close) < g.rsi_period + 2:
+    if len(close) < max(g.breakout_days, g.rsi_period) + 2:
         return False, None
-    rsi_series = calc_rsi(close, g.rsi_period)
-    rsi = rsi_series.iloc[-1]
-    if rsi is None or (rsi != rsi):
-        rsi = 50
-    # 做多：止跌 = 旭日东升 或 RSI 超卖后回升
-    strong = has_bullish_engulfing(prices)
-    weak = rsi < g.rsi_oversold + 10 and rsi > rsi_series.iloc[-2] if len(rsi_series) >= 2 else False
-    if direction == 'long' and (strong or weak):
-        return True, 'strong' if strong else 'weak'
+
+    current = close.iloc[-1]
+
+    # 强信号：突破近 N 日高点（不含当日）
+    recent_high = high.iloc[-g.breakout_days-1:-1].max()
+    if current > recent_high:
+        return True, 'strong'
+
+    # 弱信号：均线多头 + RSI 在健康区间且正在上升
+    rsi_series = _calc_rsi(close, g.rsi_period)
+    rsi_now    = rsi_series.iloc[-1]
+    rsi_prev   = rsi_series.iloc[-2] if len(rsi_series) >= 2 else rsi_now
+    if rsi_now != rsi_now:  # NaN check
+        return False, None
+
+    ma_short = close.iloc[-g.short_ma:].mean()
+    ma_long  = close.iloc[-g.long_ma:].mean()
+    ma_ok    = current > ma_short > ma_long
+    rsi_ok   = g.rsi_low <= rsi_now <= g.rsi_high and rsi_now > rsi_prev
+
+    if ma_ok and rsi_ok:
+        return True, 'weak'
+
     return False, None
 
 
-# ---------- 05 定止损 ----------
-def get_atr(prices):
-    """ATR：用 (high-low) 的滚动均简化，避免复杂 True Range 计算"""
-    high, low = prices['high'], prices['low']
-    if len(high) < g.atr_period:
+# ======================================================
+# 05 定止损
+# ======================================================
+def _get_atr(prices):
+    h, l = prices['high'], prices['low']
+    if len(h) < g.atr_period:
         return None
-    hl = (high - low).rolling(g.atr_period).mean()
-    atr = hl.iloc[-1]
-    return atr if atr and atr > 0 else None
+    atr = (h - l).rolling(g.atr_period).mean().iloc[-1]
+    return float(atr) if atr and atr > 0 else None
 
 
-def set_stop_loss(entry_price, support, prices):
-    """左侧：前低；右侧：信号K线低点；兜底：ATR."""
-    low = prices['low']
-    if len(low) < 2:
-        return entry_price * 0.95
-    signal_low = low.iloc[-1]
-    left_stop = support
-    right_stop = signal_low
-    stop = min(left_stop, right_stop) if (left_stop and right_stop) else (left_stop or right_stop)
-    if stop is None or stop >= entry_price:
-        atr = get_atr(prices)
-        if atr:
-            stop = entry_price - g.stop_atr_mult * atr
-        else:
-            stop = entry_price * 0.97
-    return max(0.01, stop)
+def calc_stop(entry_price, support, prices):
+    """
+    止损 = max(support - 1ATR, entry - 3ATR, entry × 92%)
+    三者取最高（离入场最近），保证止损不会过宽
+    """
+    atr = _get_atr(prices)
+    stops = []
+    if atr:
+        stops.append(entry_price - g.stop_atr_mult * atr)
+        if support:
+            stops.append(support - atr)
+    stops.append(entry_price * (1 - g.fixed_stop_pct))
+    return max(0.01, max(stops))  # 取最近的止损（最高价格）
 
 
-# ---------- 06 定仓位（以损定量）----------
-def calc_position_size(capital, entry_price, stop_price):
-    """总风险 = 本金 * 1.5%；仓位 = 总风险 / 单手风险（每股止损空间）"""
+# ======================================================
+# 06 定仓位（以损定量，每槽独立）
+# ======================================================
+def calc_trade_value(portfolio_value, entry_price, stop_price):
     if entry_price <= stop_price or entry_price <= 0:
         return 0
-    risk_amount = capital * g.risk_pct
-    risk_per_share = entry_price - stop_price
-    shares = int(risk_amount / risk_per_share)
-    return max(0, shares)
+    slot_cap    = portfolio_value / g.max_positions * 0.95
+    risk_amount = portfolio_value * g.risk_pct
+    risk_share  = entry_price - stop_price
+    value       = (risk_amount / risk_share) * entry_price
+    return min(value, slot_cap)
 
 
-# ---------- 07 看空间（至少 2:1 盈亏比）----------
+# ======================================================
+# 07 看空间（盈亏比 >= min_reward_ratio）
+# ======================================================
 def check_space(entry_price, stop_price, prices):
-    """目标位：前高或 入场+2*止损距离；空间不足不开仓"""
-    high = prices['high']
-    n = min(30, len(high) - 1)
+    n = min(40, len(prices['high']) - 1)
     if n < 5:
         return True
-    target = high.iloc[-n-1:-1].max()
+    target    = prices['high'].iloc[-n-1:-1].max()
     stop_dist = entry_price - stop_price
-    need_target = entry_price + g.min_reward_ratio * stop_dist
-    return target >= need_target or (target - entry_price) >= g.min_reward_ratio * stop_dist
+    if stop_dist <= 0:
+        return False
+    return (target - entry_price) >= g.min_reward_ratio * stop_dist
 
 
-# ---------- 08 开仓 / 10 加仓 ----------
-def try_open_or_add(context, entry_price, stop_price, position_value, is_add=False):
-    """开仓或加仓：以损定量"""
-    capital = context.portfolio.portfolio_value
-    if is_add:
-        capital = context.portfolio.available_cash
-    shares = calc_position_size(capital, entry_price, stop_price)
-    if shares <= 0:
-        return
-    target_value = shares * entry_price
-    if target_value > capital * 0.95:
-        target_value = capital * 0.95
-    if is_add:
-        order_target_value(g.security, position_value + target_value)
-    else:
-        order_target_value(g.security, target_value)
-
-
-# ---------- 09 平仓 ----------
-def check_exit(context, prices, position):
-    """打止损、2:1 减半仓、跟踪止盈"""
-    if not position or position.total_amount <= 0:
-        return
-    entry = position.avg_cost
-    stop = getattr(g, 'stop_loss', None)
-    if stop is None:
-        return
-    close = prices['close']
-    low = prices['low']
-    if len(low) < 1:
-        return
-    last_low = low.iloc[-1]
-    last_close = close.iloc[-1]
-    # 1) 打止损
-    if last_low <= stop:
-        order_target(g.security, 0)
-        g.stop_loss = None
-        g.trailing_stop = None
-        g.reduced_half = False
-        g.add_count = 0
-        return
-    # 2) 盈亏比 2:1 减半仓
-    if not getattr(g, 'reduced_half', False):
-        profit_ratio = (last_close - entry) / (entry - stop) if (entry - stop) > 0 else 0
-        if profit_ratio >= g.min_reward_ratio:
-            half_value = context.portfolio.positions[g.security].value / 2
-            order_target_value(g.security, half_value)
-            g.reduced_half = True
-            g.trailing_stop = last_low  # 跟踪止盈起点
-            return
-    # 3) 跟踪止盈（用 ATR）
-    trailing = getattr(g, 'trailing_stop', None)
-    if trailing is not None and last_low <= trailing:
-        order_target(g.security, 0)
-        g.stop_loss = None
-        g.trailing_stop = None
-        g.reduced_half = False
-        g.add_count = 0
-        return
-    # 上移跟踪止盈
-    if getattr(g, 'reduced_half', False) and last_close > (entry + (entry - stop)):
-        atr = get_atr(prices) if 'high' in prices and len(prices) >= g.atr_period + 1 else None
-        if atr:
-            new_trail = last_close - g.trailing_atr_mult * atr
-            if new_trail > getattr(g, 'trailing_stop', 0):
-                g.trailing_stop = new_trail
-
-
-def rebalance(context):
-    security = g.security
-    need = max(g.long_ma, g.rsi_period, g.atr_period) + 5
-    prices = attribute_history(security, need, '1d', ['open', 'high', 'low', 'close'])
-    if prices is None or len(prices) < need:
-        return
-
+# ======================================================
+# 09 平仓：固定止损 + 跟踪止盈（简化版，适合ETF）
+# ======================================================
+def check_exit_one(context, security, prices):
+    """
+    出场逻辑：
+      1. 固定止损：跌破止损价立即离场
+      2. 跟踪止盈：盈利超过 profit_trigger 后，
+                   从持仓期最高点回撤 trailing_pct 时离场
+    返回 True 表示已平仓。
+    """
+    state    = g.state.get(security)
     position = context.portfolio.positions.get(security)
-    hold_amount = position.total_amount if position else 0
-    current_price = prices['close'].iloc[-1]
 
-    # ---------- 09 平仓优先 ----------
-    if hold_amount > 0:
-        check_exit(context, prices, position)
-        position = context.portfolio.positions.get(security)
-        hold_amount = position.total_amount if position else 0
+    if not position or position.total_amount <= 0:
+        g.state.pop(security, None)
+        return True
+    if not state:
+        return False
 
-    # ---------- 01 辨趋势 ----------
-    trend, short_ma, long_ma = get_trend(prices)
-    if trend is None:
+    current = prices['close'].iloc[-1]
+    entry   = position.avg_cost
+    stop    = state.get('stop', entry * (1 - g.fixed_stop_pct))
+
+    # 更新持仓期最高价
+    state['highest'] = max(state.get('highest', entry), current)
+
+    # 1) 固定止损
+    if current <= stop:
+        order_target(security, 0)
+        g.state.pop(security, None)
+        log.info('[止损] {} 现价={:.3f} 止损={:.3f}'.format(security, current, stop))
+        return True
+
+    # 2) 跟踪止盈（只有在浮盈超过阈值后才激活）
+    profit_pct = (current - entry) / entry
+    if profit_pct >= g.profit_trigger:
+        trail_line = state['highest'] * (1 - g.trailing_pct)
+        if current <= trail_line:
+            order_target(security, 0)
+            g.state.pop(security, None)
+            log.info('[跟踪止盈] {} 现价={:.3f} 跟踪线={:.3f}'.format(
+                security, current, trail_line))
+            return True
+
+    return False
+
+
+# ======================================================
+# 主调仓逻辑（每周一执行）
+# ======================================================
+def rebalance(context):
+    need = max(g.long_ma, g.rsi_period, g.atr_period, g.breakout_days) + 5
+
+    # -------- 09 平仓优先 --------
+    for sec in list(context.portfolio.positions.keys()):
+        prices = attribute_history(sec, need, '1d', ['open', 'high', 'low', 'close'])
+        if prices is None or len(prices) < need:
+            continue
+        check_exit_one(context, sec, prices)
+
+    # -------- 检查剩余开仓容量 --------
+    open_slots = g.max_positions - len(context.portfolio.positions)
+    if open_slots <= 0:
         return
 
-    # ---------- 02 判方向 + 03 找位置 ----------
-    direction, support = get_direction_and_location(prices, trend)
-    if direction is None:
+    # -------- 扫描 ETF 池，收集满足 1-7 步的候选标的 --------
+    # 结构：(rank, security, entry_price, stop_price)
+    # rank: 0=强信号突破, 1=弱信号趋势
+    candidates = []
+
+    for sec in g.etf_pool:
+        if sec in context.portfolio.positions:
+            continue  # 已持有，跳过
+
+        prices = attribute_history(sec, need, '1d', ['open', 'high', 'low', 'close'])
+        if prices is None or len(prices) < need:
+            continue
+
+        # 01 辨趋势
+        trend = get_trend(prices)
+        if trend != 'up':
+            continue  # 只做上升趋势
+
+        # 04 看信号（ETF化信号）
+        has_sig, sig_type = get_signal(prices)
+        if not has_sig:
+            continue
+
+        entry_price = prices['close'].iloc[-1]
+
+        # 03 找位置（支撑）
+        support = get_support(prices, trend)
+
+        # 05 定止损
+        stop_price = calc_stop(entry_price, support, prices)
+
+        # 07 看空间
+        if not check_space(entry_price, stop_price, prices):
+            continue
+
+        rank = 0 if sig_type == 'strong' else 1
+        candidates.append((rank, sec, entry_price, stop_price))
+
+    if not candidates:
         return
 
-    # 只做多
-    if direction != 'long':
-        return
+    # 强信号优先，同级按 ETF 池顺序
+    candidates.sort(key=lambda x: x[0])
+    portfolio_value = context.portfolio.portfolio_value
 
-    # ---------- 04 看信号 ----------
-    has_sig, sig_type = get_signal(prices, direction)
-    if not has_sig:
-        return
+    for rank, sec, entry_price, stop_price in candidates[:open_slots]:
+        # 06 定仓位
+        trade_val = calc_trade_value(portfolio_value, entry_price, stop_price)
+        if trade_val <= 0:
+            continue
+        avail = context.portfolio.available_cash * 0.95
+        if trade_val > avail:
+            trade_val = avail
+        if trade_val <= 0:
+            continue
 
-    # ---------- 05 定止损 ----------
-    entry_price = current_price
-    stop_price = set_stop_loss(entry_price, support, prices)
+        # 08 开仓
+        order_target_value(sec, trade_val)
+        g.state[sec] = {
+            'stop':      stop_price,
+            'highest':   entry_price,
+            'add_count': 0,
+        }
+        log.info('[{}信号开仓] {} 入场={:.3f} 止损={:.3f} 风险={:.1%}'.format(
+            '强' if rank == 0 else '弱',
+            sec, entry_price, stop_price,
+            (entry_price - stop_price) / entry_price
+        ))
 
-    # ---------- 07 看空间 ----------
-    if not check_space(entry_price, stop_price, prices):
-        return
+    # -------- 10 加仓：浮盈且再次满足买点 --------
+    for sec in list(context.portfolio.positions.keys()):
+        state = g.state.get(sec)
+        if not state or state.get('add_count', 0) >= g.max_add_times:
+            continue
+        position = context.portfolio.positions.get(sec)
+        if not position or position.total_amount <= 0:
+            continue
 
-    # ---------- 06 定仓位 + 08 开仓 / 10 加仓 ----------
-    if hold_amount <= 0:
-        try_open_or_add(context, entry_price, stop_price, 0, is_add=False)
-        g.stop_loss = stop_price
-        g.reduced_half = False
-        g.add_count = 0
-    else:
-        # 10 加仓：浮盈且再次满足买点，且未超过加仓次数
-        add_count = getattr(g, 'add_count', 0)
-        if g.add_only_if_profit and add_count < g.max_add_times:
-            entry = position.avg_cost
-            if current_price > entry:
-                pos_value = context.portfolio.positions[security].value
-                try_open_or_add(context, entry_price, stop_price, pos_value, is_add=True)
-                g.add_count = add_count + 1
+        current = context.portfolio.positions[sec].price
+        if current <= position.avg_cost * 1.03:  # 至少浮盈3%才考虑加仓
+            continue
+
+        prices = attribute_history(sec, need, '1d', ['open', 'high', 'low', 'close'])
+        if prices is None or len(prices) < need:
+            continue
+
+        if get_trend(prices) != 'up':
+            continue
+        has_sig, _ = get_signal(prices)
+        if not has_sig:
+            continue
+
+        support    = get_support(prices, 'up')
+        stop_price = calc_stop(current, support, prices)
+        add_val    = min(
+            portfolio_value / g.max_positions * 0.95,
+            context.portfolio.available_cash * 0.95
+        )
+        if add_val <= 0:
+            continue
+
+        pos_val = position.value
+        order_target_value(sec, pos_val + add_val)
+        state['add_count'] = state.get('add_count', 0) + 1
+        log.info('[加仓] {} 浮盈={:.1%}'.format(
+            sec, (current - position.avg_cost) / position.avg_cost))
