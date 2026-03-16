@@ -23,6 +23,22 @@ data:
     - { symbol: "515000", exchange: "SSE", name: "科技ETF", type: "etf", market: "sh" }
     - { symbol: "512000", exchange: "SSE", name: "券商ETF", type: "etf", market: "sh" }
     - { symbol: "512800", exchange: "SSE", name: "银行ETF", type: "etf", market: "sh" }
+    - { symbol: "159208", exchange: "SZSE", name: "纳指科技ETF", type: "etf", market: "sz" }
+    - { symbol: "515880", exchange: "SSE", name: "通信ETF", type: "etf", market: "sh" }
+    - { symbol: "513120", exchange: "SSE", name: "恒生科技ETF", type: "etf", market: "sh" }
+    - { symbol: "562500", exchange: "SSE", name: "中证A500ETF", type: "etf", market: "sh" }
+    - { symbol: "515220", exchange: "SSE", name: "煤炭ETF", type: "etf", market: "sh" }
+    - { symbol: "159755", exchange: "SZSE", name: "有色金属ETF", type: "etf", market: "sz" }
+    - { symbol: "588460", exchange: "SSE", name: "科创50ETF", type: "etf", market: "sh" }
+    - { symbol: "588050", exchange: "SSE", name: "科创板50ETF", type: "etf", market: "sh" }
+    - { symbol: "515400", exchange: "SSE", name: "央企红利ETF", type: "etf", market: "sh" }
+    - { symbol: "512480", exchange: "SSE", name: "半导体ETF", type: "etf", market: "sh" }
+    - { symbol: "159819", exchange: "SZSE", name: "人工智能ETF", type: "etf", market: "sz" }
+    - { symbol: "512690", exchange: "SSE", name: "白酒ETF", type: "etf", market: "sh" }
+    - { symbol: "159869", exchange: "SZSE", name: "恒生科技指数ETF", type: "etf", market: "sz" }
+    - { symbol: "512660", exchange: "SSE", name: "军工ETF", type: "etf", market: "sh" }
+    - { symbol: "159928", exchange: "SZSE", name: "消费ETF", type: "etf", market: "sz" }
+    - { symbol: "512170", exchange: "SSE", name: "医疗ETF", type: "etf", market: "sh" }
 
 strategy:
   single:

@@ -109,3 +109,39 @@ def macd_trend_signals(
     exits = macd_ind.macd_crossed_below(macd_ind.signal)
     return close, entries, exits
 
+
+def dispatch_signals(
+    df: pd.DataFrame,
+    strategy: str,
+    *,
+    fast: int = 10,
+    slow: int = 30,
+    window: int = 20,
+    n_std: float = 2.0,
+    rsi_window: int = 14,
+    rsi_low: float = 30.0,
+    rsi_high: float = 70.0,
+    macd_fast: int = 12,
+    macd_slow: int = 26,
+    macd_signal: int = 9,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Dispatch to the correct signal function by strategy name.
+
+    Returns (close, entries, exits).
+    Supported strategy names: ma_cross, boll_breakout, boll_reversion,
+    rsi_reversion, timing_ma, macd.
+    """
+    if strategy == "ma_cross":
+        return ma_cross_signals(df, fast=fast, slow=slow)
+    if strategy == "boll_breakout":
+        return bollinger_breakout_signals(df, window=window, n_std=n_std)
+    if strategy == "boll_reversion":
+        return bollinger_reversion_signals(df, window=window, n_std=n_std)
+    if strategy == "rsi_reversion":
+        return rsi_reversion_signals(df, window=rsi_window, low=rsi_low, high=rsi_high)
+    if strategy == "timing_ma":
+        return timing_ma_signals(df, fast=fast, slow=slow)
+    if strategy == "macd":
+        return macd_trend_signals(df, fast=macd_fast, slow=macd_slow, signal=macd_signal)
+    raise ValueError(f"Unknown strategy: {strategy!r}. Choose from: ma_cross, boll_breakout, boll_reversion, rsi_reversion, timing_ma, macd")
+

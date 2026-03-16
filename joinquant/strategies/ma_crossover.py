@@ -30,13 +30,13 @@ def rebalance(context):
     """每日调仓逻辑"""
     # 获取历史收盘价
     prices = attribute_history(g.security, g.long_window + 1, '1d', ['close'])
-    if prices is None or len(prices) < g.long_window:
+    if prices is None or len(prices) < g.long_window + 1:
         return
     close = prices['close']
-    short_ma = close[-g.short_window:].mean()
-    long_ma = close[-g.long_window:].mean()
-    prev_short = close[-(g.short_window + 1):-1].mean()
-    prev_long = close[-(g.long_window + 1):-1].mean()
+    short_ma = close.iloc[-g.short_window:].mean()
+    long_ma = close.iloc[-g.long_window:].mean()
+    prev_short = close.iloc[-(g.short_window + 1):-1].mean()
+    prev_long = close.iloc[-(g.long_window + 1):-1].mean()
 
     # 当前持仓
     position = context.portfolio.positions.get(g.security)

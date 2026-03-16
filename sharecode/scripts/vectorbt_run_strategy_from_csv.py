@@ -50,30 +50,20 @@ def main() -> None:
     csv_path = Path(args.csv)
     df = pd.read_csv(csv_path)
 
-    if args.strategy == "ma_cross":
-        close, entries, exits = stg.ma_cross_signals(df, fast=args.fast, slow=args.slow)
-    elif args.strategy == "boll_breakout":
-        close, entries, exits = stg.bollinger_breakout_signals(df, window=args.window, n_std=args.n_std)
-    elif args.strategy == "boll_reversion":
-        close, entries, exits = stg.bollinger_reversion_signals(df, window=args.window, n_std=args.n_std)
-    elif args.strategy == "rsi_reversion":
-        close, entries, exits = stg.rsi_reversion_signals(
-            df,
-            window=args.rsi_window,
-            low=args.rsi_low,
-            high=args.rsi_high,
-        )
-    elif args.strategy == "timing_ma":
-        close, entries, exits = stg.timing_ma_signals(df, fast=args.fast, slow=args.slow)
-    elif args.strategy == "macd":
-        close, entries, exits = stg.macd_trend_signals(
-            df,
-            fast=args.macd_fast,
-            slow=args.macd_slow,
-            signal=args.macd_signal,
-        )
-    else:
-        raise ValueError(f"Unknown strategy: {args.strategy}")
+    close, entries, exits = stg.dispatch_signals(
+        df,
+        args.strategy,
+        fast=args.fast,
+        slow=args.slow,
+        window=args.window,
+        n_std=args.n_std,
+        rsi_window=args.rsi_window,
+        rsi_low=args.rsi_low,
+        rsi_high=args.rsi_high,
+        macd_fast=args.macd_fast,
+        macd_slow=args.macd_slow,
+        macd_signal=args.macd_signal,
+    )
 
     print("strategy", args.strategy)
     print("csv", str(csv_path))

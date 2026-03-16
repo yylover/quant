@@ -101,19 +101,16 @@ def load_close_series(
     start: str,
     end: str,
 ) -> pd.Series:
-    sql = """
-    SELECT ts, close_price
-    FROM bar
-    WHERE instrument_id = %s AND `interval` = %s
-    ORDER BY ts
-    """
+    conditions = ["instrument_id = %s", "`interval` = %s"]
     params: list[Any] = [instrument_id, interval]
     if start:
-        sql = sql.replace("ORDER BY ts", "AND ts >= %s ORDER BY ts")
+        conditions.append("ts >= %s")
         params.append(start)
     if end:
-        sql = sql.replace("ORDER BY ts", "AND ts <= %s ORDER BY ts")
+        conditions.append("ts <= %s")
         params.append(end)
+    where = " AND ".join(conditions)
+    sql = f"SELECT ts, close_price FROM bar WHERE {where} ORDER BY ts"
 
     df = pd.read_sql(sql, conn, params=params)
     if df.empty:
@@ -145,31 +142,20 @@ def main() -> None:
 
     df_for_signals = wrap_close_to_df(close)
 
-    # Use close series returned by strategy functions to ensure index aligns with entries/exits
-    if args.strategy == "ma_cross":
-        close_sig, entries, exits = stg.ma_cross_signals(df_for_signals, fast=args.fast, slow=args.slow)
-    elif args.strategy == "boll_breakout":
-        close_sig, entries, exits = stg.bollinger_breakout_signals(df_for_signals, window=args.window, n_std=args.n_std)
-    elif args.strategy == "boll_reversion":
-        close_sig, entries, exits = stg.bollinger_reversion_signals(df_for_signals, window=args.window, n_std=args.n_std)
-    elif args.strategy == "rsi_reversion":
-        close_sig, entries, exits = stg.rsi_reversion_signals(
-            df_for_signals,
-            window=args.rsi_window,
-            low=args.rsi_low,
-            high=args.rsi_high,
-        )
-    elif args.strategy == "timing_ma":
-        close_sig, entries, exits = stg.timing_ma_signals(df_for_signals, fast=args.fast, slow=args.slow)
-    elif args.strategy == "macd":
-        close_sig, entries, exits = stg.macd_trend_signals(
-            df_for_signals,
-            fast=args.macd_fast,
-            slow=args.macd_slow,
-            signal=args.macd_signal,
-        )
-    else:
-        raise ValueError(f"Unknown strategy: {args.strategy}")
+    close_sig, entries, exits = stg.dispatch_signals(
+        df_for_signals,
+        args.strategy,
+        fast=args.fast,
+        slow=args.slow,
+        window=args.window,
+        n_std=args.n_std,
+        rsi_window=args.rsi_window,
+        rsi_low=args.rsi_low,
+        rsi_high=args.rsi_high,
+        macd_fast=args.macd_fast,
+        macd_slow=args.macd_slow,
+        macd_signal=args.macd_signal,
+    )
 
     print("strategy", args.strategy)
     print("symbol", args.symbol, "exchange", args.exchange, "interval", args.interval)

@@ -40,11 +40,17 @@ def fetch_etf_hist(symbol: str, start: str, end: str, retries: int, market: str 
             df = ak.fund_etf_hist_sina(symbol=full_symbol)
             if df.empty:
                 return df
-            # 标准化列名：date/close -> 日期/收盘，便于后续复用
-            if "date" in df.columns:
-                df = df.rename(columns={"date": "日期"})
-            if "close" in df.columns:
-                df = df.rename(columns={"close": "收盘"})
+            # 标准化列名：date/close/open/high/low/volume/amount -> 中文列名，便于后续复用
+            rename_map = {
+                "date": "日期",
+                "open": "开盘",
+                "high": "最高",
+                "low": "最低",
+                "close": "收盘",
+                "volume": "成交量",
+                "amount": "成交额",
+            }
+            df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
             # 过滤日期区间
             if "日期" in df.columns:
                 df["日期"] = pd.to_datetime(df["日期"])

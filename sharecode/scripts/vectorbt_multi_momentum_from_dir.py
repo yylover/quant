@@ -104,31 +104,36 @@ def main() -> None:
     )
 
     if args.weight_scheme == "inv_vol":
-        # adjust equal weights within each rebalance window using inverse volatility
-        rets = close_df.pct_change().rolling(args.lookback)
-        vols = rets.std()
-        for date in weights.index:
+        # Compute rolling volatility once; apply inv-vol weights only at rebalance dates
+        # and broadcast the result across the whole rebalance window.
+        vols = close_df.pct_change().rolling(args.lookback).std()
+        dates = close_df.index
+        for i in range(args.lookback, len(dates), args.rebalance_days):
+            date = dates[i]
             w_row = weights.loc[date]
             active = w_row[w_row > 0].index
             if len(active) == 0:
                 continue
-            vol_row = vols.loc[date, active]
-            vol_row = vol_row.replace(0.0, pd.NA).dropna()
+            vol_row = vols.loc[date, active].replace(0.0, pd.NA).dropna()
             if vol_row.empty:
                 continue
-            inv_vol = 1.0 / vol_row
-            inv_vol = inv_vol / inv_vol.sum()
-            weights.loc[date, active] = inv_vol
+            inv_vol = (1.0 / vol_row)
+            inv_vol_norm = inv_vol / inv_vol.sum()
+            j = min(i + args.rebalance_days, len(dates))
+            weights.iloc[i:j] = 0.0
+            for sym, w in inv_vol_norm.items():
+                weights.iloc[i:j, weights.columns.get_loc(sym)] = w
 
     if args.max_weight < 1.0:
-        # cap single-name weight and renormalize within each date
-        for date in weights.index:
-            w_row = weights.loc[date]
-            w_capped = w_row.clip(upper=args.max_weight)
-            s = w_capped.sum()
+        # Cap single-name weight only at rebalance dates and broadcast to the whole window.
+        dates = weights.index
+        for i in range(args.lookback, len(dates), args.rebalance_days):
+            w_row = weights.iloc[i].clip(upper=args.max_weight)
+            s = w_row.sum()
             if s > 0:
-                w_capped = w_capped / s
-            weights.loc[date] = w_capped
+                w_row = w_row / s
+            j = min(i + args.rebalance_days, len(dates))
+            weights.iloc[i:j] = w_row.values
 
     pf = vbt.Portfolio.from_orders(
         close_df,
