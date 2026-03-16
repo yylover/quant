@@ -1,0 +1,7 @@
+akshare
+pandas
+vectorbt[full]
+backtrader
+PyMySQL
+PyYAML
+

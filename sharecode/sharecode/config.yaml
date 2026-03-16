@@ -1,0 +1,43 @@
+env:
+  conda_env: aquant
+
+db:
+  host: 49.232.196.224
+  port: 3306
+  user: quant
+  password: QuantPass123!
+  name: quant
+
+data:
+  start: "20200101"
+  end: "20251231"
+  adjust: "qfq"
+  etfs:
+    - { symbol: "510300", exchange: "SSE", name: "沪深300ETF", type: "etf", market: "sh" }
+    - { symbol: "510500", exchange: "SSE", name: "中证500ETF", type: "etf", market: "sh" }
+    - { symbol: "510050", exchange: "SSE", name: "上证50ETF", type: "etf", market: "sh" }
+    - { symbol: "159915", exchange: "SZSE", name: "创业板ETF", type: "etf", market: "sz" }
+    - { symbol: "159949", exchange: "SZSE", name: "创业板50ETF", type: "etf", market: "sz" }
+    - { symbol: "512100", exchange: "SSE", name: "消费ETF", type: "etf", market: "sh" }
+    - { symbol: "512010", exchange: "SSE", name: "医药ETF", type: "etf", market: "sh" }
+    - { symbol: "515000", exchange: "SSE", name: "科技ETF", type: "etf", market: "sh" }
+    - { symbol: "512000", exchange: "SSE", name: "券商ETF", type: "etf", market: "sh" }
+    - { symbol: "512800", exchange: "SSE", name: "银行ETF", type: "etf", market: "sh" }
+
+strategy:
+  single:
+    strategy: "ma_cross"
+    fast: 10
+    slow: 60
+    init_cash: 100000.0
+    fees: 0.001
+    slippage: 0.0005
+    sl_pct: 0.05
+    tp_pct: 0.15
+  portfolio:
+    lookback: 60
+    top_n: 5
+    rebalance_days: 20
+    weight_scheme: "inv_vol"
+    max_weight: 0.25
+
