@@ -125,6 +125,38 @@ def get_trend(prices):
 
 
 # ======================================================
+# 市场环境分档（大盘过滤）
+# ======================================================
+def get_market_regime():
+    """
+    以沪深300（000300.XSHG）MA60 为基准，判断市场环境。
+    返回 (max_open_positions, regime_factor)：
+      牛市（偏差 > +2%）：(2, 1.00)
+      震荡（偏差 ±2%）  ：(1, 0.70)
+      熊市（偏差 < -2%）：(1, 0.40)
+    fallback（数据不足）：(1, 0.70)
+    """
+    data = attribute_history('000300.XSHG', 65, '1d', ['close'])
+    if data is None or len(data) < 60:
+        return 1, 0.70  # 数据不足，默认震荡档
+
+    close = data['close']
+    current = close.iloc[-1]
+    ma60 = close.iloc[-60:].mean()
+
+    if ma60 <= 0:
+        return 1, 0.70
+
+    diff = (current - ma60) / ma60
+    if diff > 0.02:
+        return 2, 1.00   # 牛市
+    elif diff < -0.02:
+        return 1, 0.40   # 熊市
+    else:
+        return 1, 0.70   # 震荡
+
+
+# ======================================================
 # 03 找位置（支撑/阻力）
 # ======================================================
 def get_support(prices, trend):
