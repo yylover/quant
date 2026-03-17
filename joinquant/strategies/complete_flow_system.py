@@ -173,7 +173,7 @@ def get_support(prices, trend):
 
 
 # ======================================================
-# 04 看信号（ETF专用）
+# 04 看信号（ETF专用）→ 动量评分
 # ======================================================
 def _calc_rsi(close_series, period):
     delta    = close_series.diff()
@@ -185,42 +185,55 @@ def _calc_rsi(close_series, period):
     return 100 - (100 / (1 + rs))
 
 
-def get_signal(prices):
+# ======================================================
+# 动量评分（替代二元信号）
+# ======================================================
+def calc_momentum_score(prices):
     """
-    ETF 适用信号（替代 K 线形态）：
-      强信号：收盘价突破近 N 日最高价（动能突破）
-      弱信号：均线多头排列 + RSI 在健康区间且上升
-    返回 (has_signal, 'strong'/'weak'/None)
+    综合动量评分，返回 0.0～100.0。
+    数据不足（< g.long_ma + 1 条）或 RSI 为 NaN 时返回 0.0。
+
+    子项（各自独立上限，三项之和最大为100）：
+      突破强度（40分）：收盘突破近 g.breakout_days 日高点的幅度，5%→满分
+      RSI强度  （30分）：RSI 在 45～70 线性映射；RSI > 70 强制为 0
+      均线斜率  （30分）：短均线高于长均线的偏差，3%→满分；负偏差为 0
     """
     close = prices['close']
     high  = prices['high']
 
-    if len(close) < max(g.breakout_days, g.rsi_period) + 2:
-        return False, None
+    if len(close) < g.long_ma + 1:
+        return 0.0
 
     current = close.iloc[-1]
 
-    # 强信号：突破近 N 日高点（不含当日）
-    recent_high = high.iloc[-g.breakout_days-1:-1].max()
-    if current > recent_high:
-        return True, 'strong'
+    # --- 突破强度 ---
+    recent_high = high.iloc[-g.breakout_days - 1:-1].max()
+    if recent_high > 0:
+        breakout_ratio = (current - recent_high) / recent_high
+        breakout_score = min(max(breakout_ratio, 0) / 0.05, 1.0) * 40
+    else:
+        breakout_score = 0.0
 
-    # 弱信号：均线多头 + RSI 在健康区间且正在上升
+    # --- RSI强度 ---
     rsi_series = _calc_rsi(close, g.rsi_period)
-    rsi_now    = rsi_series.iloc[-1]
-    rsi_prev   = rsi_series.iloc[-2] if len(rsi_series) >= 2 else rsi_now
-    if rsi_now != rsi_now:  # NaN check
-        return False, None
+    rsi = rsi_series.iloc[-1]
+    if rsi != rsi:  # NaN check
+        return 0.0
+    if rsi <= 70:
+        rsi_score = max((rsi - 45) / 25, 0) * 30
+    else:
+        rsi_score = 0.0  # 过热，避免追高
 
+    # --- 均线斜率 ---
     ma_short = close.iloc[-g.short_ma:].mean()
     ma_long  = close.iloc[-g.long_ma:].mean()
-    ma_ok    = current > ma_short > ma_long
-    rsi_ok   = g.rsi_low <= rsi_now <= g.rsi_high and rsi_now > rsi_prev
+    if ma_long > 0:
+        slope_ratio = (ma_short - ma_long) / ma_long
+        slope_score = min(max(slope_ratio, 0) / 0.03, 1.0) * 30
+    else:
+        slope_score = 0.0
 
-    if ma_ok and rsi_ok:
-        return True, 'weak'
-
-    return False, None
+    return breakout_score + rsi_score + slope_score
 
 
 # ======================================================
@@ -252,10 +265,10 @@ def calc_stop(entry_price, support, prices):
 # ======================================================
 # 06 定仓位（以损定量，每槽独立）
 # ======================================================
-def calc_trade_value(portfolio_value, entry_price, stop_price):
+def calc_trade_value(portfolio_value, entry_price, stop_price, regime_factor=1.0):
     if entry_price <= stop_price or entry_price <= 0:
         return 0
-    slot_cap    = portfolio_value / g.max_positions * 0.95
+    slot_cap    = portfolio_value / g.max_positions * 0.95 * regime_factor
     risk_amount = portfolio_value * g.risk_pct
     risk_share  = entry_price - stop_price
     value       = (risk_amount / risk_share) * entry_price
@@ -330,6 +343,11 @@ def check_exit_one(context, security, prices):
 def rebalance(context):
     need = max(g.long_ma, g.rsi_period, g.atr_period, g.breakout_days) + 5
 
+    # -------- 市场环境分档 --------
+    max_open_positions, regime_factor = get_market_regime()
+    log.info('[市场环境] max_open_positions={} regime_factor={:.0%}'.format(
+        max_open_positions, regime_factor))
+
     # -------- 09 平仓优先 --------
     for sec in list(context.portfolio.positions.keys()):
         prices = attribute_history(sec, need, '1d', ['open', 'high', 'low', 'close'])
@@ -338,13 +356,14 @@ def rebalance(context):
         check_exit_one(context, sec, prices)
 
     # -------- 检查剩余开仓容量 --------
-    open_slots = g.max_positions - len(context.portfolio.positions)
+    # 注意：JoinQuant 平仓订单在当日收盘后才结算，此处 len(positions) 仍含刚发出平仓的标的
+    # 这是平台限制，行为与原策略一致，熊市档下属于保守处理（接受）
+    open_slots = max_open_positions - len(context.portfolio.positions)
     if open_slots <= 0:
         return
 
-    # -------- 扫描 ETF 池，收集满足 1-7 步的候选标的 --------
-    # 结构：(rank, security, entry_price, stop_price)
-    # rank: 0=强信号突破, 1=弱信号趋势
+    # -------- 扫描 ETF 池，收集满足条件的候选标的 --------
+    # 结构：(score, security, entry_price, stop_price)
     candidates = []
 
     for sec in g.etf_pool:
@@ -355,15 +374,15 @@ def rebalance(context):
         if prices is None or len(prices) < need:
             continue
 
-        # 01 辨趋势
+        # 01 辨趋势（放宽：只排除明确空头，震荡期也可参与）
         trend = get_trend(prices)
-        if trend != 'up':
-            continue  # 只做上升趋势
-
-        # 04 看信号（ETF化信号）
-        has_sig, sig_type = get_signal(prices)
-        if not has_sig:
+        if trend == 'down':
             continue
+
+        # 动量评分（替代原有强/弱二元信号）
+        score = calc_momentum_score(prices)
+        if score < 30:
+            continue  # 分数不足，跳过
 
         entry_price = prices['close'].iloc[-1]
 
@@ -377,19 +396,18 @@ def rebalance(context):
         if not check_space(entry_price, stop_price, prices):
             continue
 
-        rank = 0 if sig_type == 'strong' else 1
-        candidates.append((rank, sec, entry_price, stop_price))
+        candidates.append((score, sec, entry_price, stop_price))
 
     if not candidates:
         return
 
-    # 强信号优先，同级按 ETF 池顺序
-    candidates.sort(key=lambda x: x[0])
+    # 按评分降序排列，取前 open_slots 名
+    candidates.sort(key=lambda x: x[0], reverse=True)
     portfolio_value = context.portfolio.portfolio_value
 
-    for rank, sec, entry_price, stop_price in candidates[:open_slots]:
-        # 06 定仓位
-        trade_val = calc_trade_value(portfolio_value, entry_price, stop_price)
+    for score, sec, entry_price, stop_price in candidates[:open_slots]:
+        # 06 定仓位（传入 regime_factor）
+        trade_val = calc_trade_value(portfolio_value, entry_price, stop_price, regime_factor)
         if trade_val <= 0:
             continue
         avail = context.portfolio.available_cash * 0.95
@@ -405,10 +423,10 @@ def rebalance(context):
             'highest':   entry_price,
             'add_count': 0,
         }
-        log.info('[{}信号开仓] {} 入场={:.3f} 止损={:.3f} 风险={:.1%}'.format(
-            '强' if rank == 0 else '弱',
-            sec, entry_price, stop_price,
-            (entry_price - stop_price) / entry_price
+        log.info('[开仓] {} 得分={:.1f} 入场={:.3f} 止损={:.3f} 风险={:.1%} 环境系数={:.0%}'.format(
+            sec, score, entry_price, stop_price,
+            (entry_price - stop_price) / entry_price,
+            regime_factor
         ))
 
     # -------- 10 加仓：浮盈且再次满足买点 --------
@@ -428,23 +446,26 @@ def rebalance(context):
         if prices is None or len(prices) < need:
             continue
 
-        if get_trend(prices) != 'up':
+        # 趋势过滤（与新开仓对称：只排除明确空头）
+        if get_trend(prices) == 'down':
             continue
-        has_sig, _ = get_signal(prices)
-        if not has_sig:
+        # 信号过滤（评分 >= 30）
+        if calc_momentum_score(prices) < 30:
             continue
 
         support    = get_support(prices, 'up')
         stop_price = calc_stop(current, support, prices)
-        add_val    = min(
-            portfolio_value / g.max_positions * 0.95,
-            context.portfolio.available_cash * 0.95
-        )
+
+        # 加仓量 = 目标槽位价值 − 当前持仓价值（防止超配）
+        pos_val    = position.value
+        target_val = calc_trade_value(portfolio_value, current, stop_price, regime_factor)
+        add_val    = max(0, target_val - pos_val)
+        avail      = context.portfolio.available_cash * 0.95
+        add_val    = min(add_val, avail)
         if add_val <= 0:
             continue
 
-        pos_val = position.value
         order_target_value(sec, pos_val + add_val)
         state['add_count'] = state.get('add_count', 0) + 1
-        log.info('[加仓] {} 浮盈={:.1%}'.format(
-            sec, (current - position.avg_cost) / position.avg_cost))
+        log.info('[加仓] {} 浮盈={:.1%} 加仓量={:.0f}'.format(
+            sec, (current - position.avg_cost) / position.avg_cost, add_val))
