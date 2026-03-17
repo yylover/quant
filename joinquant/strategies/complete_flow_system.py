@@ -88,7 +88,7 @@ def initialize(context):
     g.max_positions = 2       # slot_cap 计算基准（固定为2，不随大盘变化；实际持仓数由 get_market_regime() 动态决定）
 
     # ---------- 07 看空间 ----------
-    g.min_reward_ratio = 1.5  # 最低盈亏比1.5:1（ETF波动幅度较小）
+    g.min_reward_ratio = 1.5  # 恢复为 1.5:1，保证盈亏比质量
 
     # ---------- 09 平仓：简化出场逻辑 ----------
     g.trailing_pct   = 0.10   # 跟踪止盈：从持仓最高点回撤10%离场
@@ -132,20 +132,20 @@ def get_market_regime():
     以沪深300（000300.XSHG）MA60 为基准，判断市场环境。
     返回 (max_open_positions, regime_factor)：
       牛市（偏差 > +2%）：(2, 1.00)
-      震荡（偏差 ±2%）  ：(1, 0.70)
+      震荡（偏差 ±2%）  ：(2, 0.70)
       熊市（偏差 < -2%）：(1, 0.40)
-    fallback（数据不足）：(1, 0.70)
+    fallback（数据不足）：(2, 0.70)
     """
     data = attribute_history('000300.XSHG', 65, '1d', ['close'])
     if data is None or len(data) < 60:
-        return 1, 0.70  # 数据不足，默认震荡档
+        return 2, 0.70  # 数据不足，默认按震荡档处理
 
     close = data['close']
     current = close.iloc[-1]
     ma60 = close.iloc[-60:].mean()
 
     if ma60 <= 0:
-        return 1, 0.70
+        return 2, 0.70
 
     diff = (current - ma60) / ma60
     if diff > 0.02:
@@ -153,7 +153,7 @@ def get_market_regime():
     elif diff < -0.02:
         return 1, 0.40   # 熊市
     else:
-        return 1, 0.70   # 震荡
+        return 2, 0.70   # 震荡
 
 
 # ======================================================
@@ -381,6 +381,7 @@ def rebalance(context):
 
         # 动量评分（替代原有强/弱二元信号）
         score = calc_momentum_score(prices)
+        # 入场门槛：保持评分 >= 30，聚焦更强趋势
         if score < 30:
             continue  # 分数不足，跳过
 
@@ -449,7 +450,7 @@ def rebalance(context):
         # 趋势过滤（与新开仓对称：只排除明确空头）
         if get_trend(prices) == 'down':
             continue
-        # 信号过滤（评分 >= 30）
+        # 信号过滤（评分 >= 30，与新开仓阈值保持一致）
         if calc_momentum_score(prices) < 30:
             continue
 

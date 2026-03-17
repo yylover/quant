@@ -3,7 +3,9 @@ insert into MySQL via INSERT IGNORE.
 
 Features
 --------
-- Rate-limited with configurable --delay between requests (default 1.5 s)
+- Rate-limited with configurable --delay between requests (default 5 s)
+- Random jitter added to each inter-request sleep to avoid detection
+- Long --cooldown sleep after a symbol fails all retries (default 60 s)
 - Exponential back-off retry on AkShare errors
 - --skip-existing: skip symbols already having bar data in DB
 - --save-csv: also write fetched data to data/<symbol>_daily_qfq.csv
@@ -15,14 +17,15 @@ Usage
 -----
     conda activate aquant
     cd sharecode
-    python scripts/fetch_and_load_all.py
-    python scripts/fetch_and_load_all.py --delay 2.0 --skip-existing --save-csv
+    python scripts/fetch_and_load_all.py --save-csv
+    python scripts/fetch_and_load_all.py --delay 5 --cooldown 60 --skip-existing --save-csv
     python scripts/fetch_and_load_all.py --symbols 510300,512800 --dry-run
 """
 from __future__ import annotations
 
 import argparse
 import logging
+import random
 import sys
 import time
 from datetime import date
@@ -55,33 +58,40 @@ log = logging.getLogger(__name__)
 
 def fetch_etf(
     symbol: str,
+    market: str,
     start: str,
     end: str,
-    adjust: str,
     retries: int,
     delay: float,
 ) -> pd.DataFrame:
-    """Fetch ETF daily history via fund_etf_hist_em (东方财富).
+    """Fetch ETF daily history via fund_etf_hist_sina (新浪财经).
 
-    Returns DataFrame with Chinese column names.
-    Retries with linear back-off; raises RuntimeError after all attempts fail.
+    market: 'sh' or 'sz', combined with symbol to form e.g. 'sh510300'.
+    start/end: YYYYMMDD strings used to filter the full returned history.
+    Returns DataFrame with Chinese column names (日期/开盘/收盘/最高/最低/成交量/成交额).
     """
+    full_symbol = f"{market}{symbol}"
     last_err: Exception | None = None
     for attempt in range(retries):
         try:
-            df = ak.fund_etf_hist_em(
-                symbol=symbol,
-                period="daily",
-                start_date=start,
-                end_date=end,
-                adjust=adjust,
-            )
+            df = ak.fund_etf_hist_sina(symbol=full_symbol)
+            if df.empty:
+                return df
+            rename_map = {
+                "date": "日期", "open": "开盘", "high": "最高",
+                "low": "最低", "close": "收盘", "volume": "成交量", "amount": "成交额",
+            }
+            df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+            df["日期"] = pd.to_datetime(df["日期"])
+            start_ts = pd.to_datetime(start)
+            end_ts   = pd.to_datetime(end)
+            df = df[(df["日期"] >= start_ts) & (df["日期"] <= end_ts)].reset_index(drop=True)
             return df
         except Exception as exc:
             last_err = exc
-            wait = delay * (attempt + 1)
+            wait = 10.0 * (attempt + 1)
             log.warning(
-                "    attempt %d/%d failed: %s — retry in %.1fs",
+                "    attempt %d/%d failed: %s — retry in %.0fs",
                 attempt + 1, retries, exc, wait,
             )
             if attempt < retries - 1:
@@ -173,7 +183,7 @@ def insert_bars(
     df = df.sort_values(date_col)
     n = len(df)
 
-    timestamps = df[date_col].dt.to_pydatetime().tolist()
+    timestamps = [ts.to_pydatetime() for ts in df[date_col]]
     opens  = df[open_col].astype(float).tolist()
     highs  = df[high_col].astype(float).tolist()
     lows   = df[low_col].astype(float).tolist()
@@ -216,9 +226,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", default=str(CONFIG_PATH), help="Path to config.yaml")
     p.add_argument("--start", default="", help="Override start date (YYYYMMDD)")
     p.add_argument("--end",   default="", help="Override end date (YYYYMMDD); default: today")
-    p.add_argument("--delay",   type=float, default=1.5,
+    p.add_argument("--delay",   type=float, default=5.0,
                    help="Seconds to sleep between AkShare requests")
-    p.add_argument("--retries", type=int,   default=5,
+    p.add_argument("--jitter",  type=float, default=3.0,
+                   help="Max random extra seconds added to each inter-request sleep")
+    p.add_argument("--cooldown", type=float, default=60.0,
+                   help="Seconds to sleep after a symbol fails all retries")
+    p.add_argument("--retries", type=int,   default=3,
                    help="Retry attempts per symbol")
     p.add_argument("--skip-existing", action="store_true",
                    help="Skip symbols that already have bar rows in the DB")
@@ -253,8 +267,8 @@ def main() -> None:
             sys.exit(1)
 
     log.info(
-        "=== fetch_and_load_all  symbols=%d  %s→%s  delay=%.1fs  skip_existing=%s  dry_run=%s ===",
-        len(etfs), start, end, args.delay, args.skip_existing, args.dry_run,
+        "=== fetch_and_load_all  symbols=%d  %s→%s  delay=%.0fs  jitter=%.0fs  cooldown=%.0fs ===",
+        len(etfs), start, end, args.delay, args.jitter, args.cooldown,
     )
 
     conn: pymysql.connections.Connection | None = None
@@ -274,19 +288,23 @@ def main() -> None:
 
             log.info("[%d/%d] %s  %s", idx, len(etfs), symbol, name)
 
-            # --- fetch from AkShare ---
+            # --- fetch from AkShare (新浪财经) ---
             try:
-                df = fetch_etf(symbol, start, end, adjust, args.retries, args.delay)
+                df = fetch_etf(symbol, etf["market"], start, end, args.retries, args.delay)
             except Exception as exc:
                 log.error("  FAIL fetch: %s", exc)
                 fail_list.append((symbol, f"fetch: {exc}"))
-                time.sleep(args.delay)
+                # Long cooldown so the remote rate-limit window resets.
+                if idx < len(etfs):
+                    log.info("  cooling down for %.0fs before next symbol …", args.cooldown)
+                    time.sleep(args.cooldown)
                 continue
 
             if df.empty:
                 log.warning("  SKIP: empty DataFrame returned by AkShare")
                 skip_list.append(symbol)
-                time.sleep(args.delay)
+                if idx < len(etfs):
+                    time.sleep(args.delay + random.uniform(0, args.jitter))
                 continue
 
             date_col = "日期" if "日期" in df.columns else "date"
@@ -317,7 +335,8 @@ def main() -> None:
                             conn.commit()
                             log.info("  SKIP DB: already has %d bars", existing)
                             skip_list.append(symbol)
-                            time.sleep(args.delay)
+                            if idx < len(etfs):
+                                time.sleep(args.delay + random.uniform(0, args.jitter))
                             continue
 
                     inserted = insert_bars(conn, inst_id, interval, df)
@@ -332,7 +351,9 @@ def main() -> None:
 
             # rate-limit: sleep between requests (skip after the last one)
             if idx < len(etfs):
-                time.sleep(args.delay)
+                sleep_time = args.delay + random.uniform(0, args.jitter)
+                log.info("  sleeping %.1fs before next request …", sleep_time)
+                time.sleep(sleep_time)
 
     finally:
         if conn is not None:
