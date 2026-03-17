@@ -70,7 +70,7 @@ def initialize(context):
     # ---------- 01 辨趋势：均线周期 ----------
     g.short_ma        = 20    # 短期均线（20日，约1个月）
     g.long_ma         = 60    # 长期均线（60日，约3个月）
-    g.trend_threshold = 0.01  # 均线偏差阈值
+    g.trend_threshold = 0.003  # 均线偏差阈值（降低，震荡期也可参与）
 
     # ---------- 04 看信号：ETF适用信号 ----------
     g.breakout_days = 20      # 突破信号：价格突破N日最高价
@@ -85,14 +85,14 @@ def initialize(context):
 
     # ---------- 06 定仓位 ----------
     g.risk_pct      = 0.015   # 单笔最大风险：净值1.5%
-    g.max_positions = 2       # 最多同时持有2个ETF
+    g.max_positions = 2       # slot_cap 计算基准（固定为2，不随大盘变化；实际持仓数由 get_market_regime() 动态决定）
 
     # ---------- 07 看空间 ----------
     g.min_reward_ratio = 1.5  # 最低盈亏比1.5:1（ETF波动幅度较小）
 
     # ---------- 09 平仓：简化出场逻辑 ----------
     g.trailing_pct   = 0.10   # 跟踪止盈：从持仓最高点回撤10%离场
-    g.profit_trigger = 0.05   # 达到5%浮盈后才启动跟踪止盈
+    g.profit_trigger = 0.03   # 达到3%浮盈后启动跟踪止盈（更早锁利）
 
     # ---------- 10 加仓 ----------
     g.max_add_times = 1
