@@ -38,8 +38,16 @@ def initialize(context):
     g.signal = 9
 
     # 趋势判定阈值
-    g.min_hist = 0.0           # 多头至少柱状图 >= 0
-    g.min_hist_exit = 0.0     # 离场阈值（可设成 -0.0~0.0 来增加鲁棒性）
+    # MACD 柱状图阈值：用“上穿/下穿”而不是只看当前值
+    # 目的：减少在 0 附近反复波动导致的来回切换
+    g.min_hist = 0.0           # 多头入场：柱状图从 <= 该值 上穿
+    g.min_hist_exit = 0.0     # 离场：柱状图从 >= 该值 下穿
+
+    # 只有在 DIF 上穿 DEA 且柱状图上穿时入场（更贴近趋势启动）
+    g.require_dif_cross_for_entry = True
+
+    # 离场：DIF 死叉 或 柱状图下穿（两者满足任一即可）
+    g.exit_on_death_or_hist_cross = True
 
     # 资金使用比例
     g.order_pct = 0.95
@@ -75,25 +83,41 @@ def rebalance(context):
     close = prices['close']
     dif, dea, bar = get_macd(close, g.fast, g.slow, g.signal)
 
-    d_now = dif.iloc[-1]
-    e_now = dea.iloc[-1]
-    b_now = bar.iloc[-1]
+    d_prev, d_now = dif.iloc[-2], dif.iloc[-1]
+    e_prev, e_now = dea.iloc[-2], dea.iloc[-1]
+    b_prev, b_now = bar.iloc[-2], bar.iloc[-1]
 
     position = context.portfolio.positions.get(sec)
     has_pos = position is not None and position.total_amount > 0
 
-    # --- 趋势状态机 ---
-    bullish = (d_now > e_now) and (b_now >= g.min_hist)
-    bearish = (d_now < e_now) or (b_now < g.min_hist_exit)
+    # --- 趋势状态机（触发用交叉，持有用状态） ---
+    dif_up = d_now > e_now
+    dif_down = d_now < e_now
 
-    # 入场/持有
-    if bullish:
-        if not has_pos:
-            order_target_value(sec, context.portfolio.available_cash * g.order_pct)
+    hist_cross_up = (b_prev <= g.min_hist) and (b_now > g.min_hist)
+    hist_cross_down = (b_prev >= g.min_hist_exit) and (b_now < g.min_hist_exit)
+
+    golden = (d_prev <= e_prev) and (d_now > e_now)   # DIF 上穿 DEA
+    death = (d_prev >= e_prev) and (d_now < e_now)    # DIF 下穿 DEA
+
+    # 入场：优先使用“趋势启动”条件，降低噪声切换
+    if not has_pos:
+        if g.require_dif_cross_for_entry:
+            if golden and hist_cross_up:
+                order_target_value(sec, context.portfolio.available_cash * g.order_pct)
+        else:
+            if dif_up and b_now >= g.min_hist:
+                order_target_value(sec, context.portfolio.available_cash * g.order_pct)
         return
 
-    # 离场
-    if bearish and has_pos:
+    # 离场：DIF 死叉 或 柱状图下穿（择一即可）
+    if g.exit_on_death_or_hist_cross:
+        if death or hist_cross_down:
+            order_target(sec, 0)
+            return
+
+    # 保底：若不满足离场开关，则用更宽松条件维持趋势
+    if dif_down or (b_now < g.min_hist_exit):
         order_target(sec, 0)
         return
 
