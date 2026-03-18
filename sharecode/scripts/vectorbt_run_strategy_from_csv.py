@@ -19,7 +19,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--strategy",
         required=True,
-        choices=["ma_cross", "boll_breakout", "boll_reversion", "rsi_reversion", "timing_ma", "macd"],
+        choices=[
+            "ma_cross",
+            "boll_breakout",
+            "boll_reversion",
+            "rsi_reversion",
+            "timing_ma",
+            "macd",
+            "ema_slope_trend",
+        ],
     )
     # common backtest params
     p.add_argument("--init-cash", type=float, default=100000.0)
@@ -42,6 +50,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--macd-fast", type=int, default=12)
     p.add_argument("--macd-slow", type=int, default=26)
     p.add_argument("--macd-signal", type=int, default=9)
+    # EMA slope-trend params
+    p.add_argument("--buy-ema", type=int, default=2)
+    p.add_argument("--slope-n", type=int, default=21)
+    p.add_argument("--slope-scale", type=float, default=20.0)
+    p.add_argument("--sell-ema", type=int, default=42)
+    p.add_argument("--confirm", action="store_true", help="enable guide/boundary secondary confirmation (default)")
+    p.add_argument("--no-confirm", action="store_true", help="disable guide/boundary confirmation")
+    p.add_argument("--guide-ema2", type=int, default=2)
+    p.add_argument("--boundary-ma", type=int, default=27)
     return p.parse_args()
 
 
@@ -63,6 +80,13 @@ def main() -> None:
         macd_fast=args.macd_fast,
         macd_slow=args.macd_slow,
         macd_signal=args.macd_signal,
+        buy_ema=args.buy_ema,
+        slope_n=args.slope_n,
+        slope_scale=args.slope_scale,
+        sell_ema=args.sell_ema,
+        confirm=not args.no_confirm,
+        guide_ema2=args.guide_ema2,
+        boundary_ma=args.boundary_ma,
     )
 
     print("strategy", args.strategy)

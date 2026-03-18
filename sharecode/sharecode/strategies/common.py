@@ -45,6 +45,69 @@ def _prepare_ohlc(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _ema(s: pd.Series, span: int) -> pd.Series:
+    if span <= 0:
+        raise ValueError("EMA span must be > 0")
+    return s.ewm(span=span, adjust=False).mean()
+
+
+def _sma(s: pd.Series, window: int) -> pd.Series:
+    if window <= 0:
+        raise ValueError("SMA window must be > 0")
+    return s.rolling(window).mean()
+
+
+def ema_slope_trend_signals(
+    df: pd.DataFrame,
+    *,
+    buy_ema: int = 2,
+    slope_n: int = 21,
+    slope_scale: float = 20.0,
+    sell_ema: int = 42,
+    confirm: bool = True,
+    guide_emas: tuple[int, int, int, int] = (4, 6, 12, 24),
+    guide_ema2: int = 2,
+    boundary_ma: int = 27,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """EMA + slope-adjusted trend line crossover.
+
+    Based on the formula:
+      buy_line  = EMA(C, buy_ema)
+      sell_line = EMA(SLOPE(C, slope_n) * slope_scale + C, sell_ema)
+
+    Where SLOPE(C, n) is approximated as (C - C.shift(n)) / n (per-bar change).
+
+    Optional secondary confirmation (confirm=True):
+      guide    = EMA( (EMA(C,4)+EMA(C,6)+EMA(C,12)+EMA(C,24))/4 , 2 )
+      boundary = MA(C, 27)
+    - Entry requires buy_line crosses above sell_line AND guide >= boundary.
+    - Exit triggers on sell_line crosses above buy_line OR boundary crosses above guide.
+    """
+    close = _prepare_close(df)
+
+    buy_line = _ema(close, buy_ema)
+    slope = (close - close.shift(slope_n)) / float(slope_n)
+    sell_src = slope * float(slope_scale) + close
+    sell_line = _ema(sell_src, sell_ema)
+
+    bu = buy_line.vbt.crossed_above(sell_line)
+    sel = sell_line.vbt.crossed_above(buy_line)
+
+    if not confirm:
+        entries = bu
+        exits = sel
+        return close, entries.fillna(False), exits.fillna(False)
+
+    e1, e2, e3, e4 = guide_emas
+    guide_raw = (_ema(close, e1) + _ema(close, e2) + _ema(close, e3) + _ema(close, e4)) / 4.0
+    guide = _ema(guide_raw, guide_ema2)
+    boundary = _sma(close, boundary_ma)
+
+    entries = bu & (guide >= boundary)
+    exits = sel | boundary.vbt.crossed_above(guide)
+    return close, entries.fillna(False), exits.fillna(False)
+
+
 def ma_cross_signals(df: pd.DataFrame, fast: int = 10, slow: int = 30) -> tuple[pd.Series, pd.Series, pd.Series]:
     """Dual moving average crossover trend-following strategy.
 
@@ -335,13 +398,21 @@ def dispatch_signals(
     squeeze_q: float = 0.2,
     atr_window: int = 10,
     multiplier: float = 3.0,
+    # EMA slope-trend params
+    buy_ema: int = 2,
+    slope_n: int = 21,
+    slope_scale: float = 20.0,
+    sell_ema: int = 42,
+    confirm: bool = True,
+    guide_ema2: int = 2,
+    boundary_ma: int = 27,
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
     """Dispatch to the correct signal function by strategy name.
 
     Returns (close, entries, exits).
     Supported strategy names: ma_cross, boll_breakout, boll_reversion,
     rsi_reversion, timing_ma, macd,
-    donchian, momentum, ma_slope, bb_squeeze, supertrend.
+    donchian, momentum, ma_slope, bb_squeeze, supertrend, ema_slope_trend.
     """
     # 统一入口：方便 CLI/一键脚本按字符串策略名调用，并集中管理各策略参数默认值。
     if strategy == "ma_cross":
@@ -356,6 +427,17 @@ def dispatch_signals(
         return timing_ma_signals(df, fast=fast, slow=slow)
     if strategy == "macd":
         return macd_trend_signals(df, fast=macd_fast, slow=macd_slow, signal=macd_signal)
+    if strategy == "ema_slope_trend":
+        return ema_slope_trend_signals(
+            df,
+            buy_ema=buy_ema,
+            slope_n=slope_n,
+            slope_scale=slope_scale,
+            sell_ema=sell_ema,
+            confirm=confirm,
+            guide_ema2=guide_ema2,
+            boundary_ma=boundary_ma,
+        )
     if strategy == "donchian":
         return donchian_breakout_signals(df, entry_n=entry_n, exit_n=exit_n)
     if strategy == "momentum":
@@ -375,6 +457,6 @@ def dispatch_signals(
     raise ValueError(
         "Unknown strategy: "
         f"{strategy!r}. Choose from: ma_cross, boll_breakout, boll_reversion, rsi_reversion, "
-        "timing_ma, macd, donchian, momentum, ma_slope, bb_squeeze, supertrend"
+        "timing_ma, macd, ema_slope_trend, donchian, momentum, ma_slope, bb_squeeze, supertrend"
     )
 

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 优化 `strategies/complete_flow_system.py`，通过动量评分系统替代二元信号、大盘分档控仓，提升年化收益率，同时将最大回撤控制在20%以内。
+**Goal:** 优化 `strategies/trend/complete_flow_system.py`，通过动量评分系统替代二元信号、大盘分档控仓，提升年化收益率，同时将最大回撤控制在20%以内。
 
 **Architecture:** 在保持原有10步交易框架不变的前提下，新增两个纯函数（`get_market_regime`、`calc_momentum_score`），修改 `calc_trade_value` 签名加入 `regime_factor`，更新 `rebalance` 整合新逻辑，删除已废弃的 `get_signal`。
 
@@ -14,7 +14,7 @@
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `strategies/complete_flow_system.py` | 修改 | 唯一改动文件，所有变更集中于此 |
+| `strategies/trend/complete_flow_system.py` | 修改 | 唯一改动文件，所有变更集中于此 |
 
 ---
 
@@ -25,7 +25,7 @@
 ### Task 1：更新 `initialize()` 参数
 
 **Files:**
-- Modify: `strategies/complete_flow_system.py:71-98`
+- Modify: `strategies/trend/complete_flow_system.py:71-98`
 
 **背景：** `trend_threshold` 从 `0.01` 降至 `0.003`，让均线偏差在 ±0.3% 以内的 ETF 被判为震荡（flat），而非空头（down）。`profit_trigger` 从 `0.05` 降至 `0.03`，更早启动跟踪止盈。
 
@@ -65,7 +65,7 @@
 - [ ] **Step 4：Commit**
 
   ```bash
-  git add strategies/complete_flow_system.py
+  git add strategies/trend/complete_flow_system.py
   git commit -m "feat: 降低趋势阈值 trend_threshold=0.003, profit_trigger=0.03"
   ```
 
@@ -74,7 +74,7 @@
 ### Task 2：新增 `get_market_regime()` 函数
 
 **Files:**
-- Modify: `strategies/complete_flow_system.py`（在 `get_trend()` 函数结束之后、`get_support()` 函数之前插入）
+- Modify: `strategies/trend/complete_flow_system.py`（在 `get_trend()` 函数结束之后、`get_support()` 函数之前插入）
 
 **背景：** 以沪深300 MA60 为基准，返回 `(max_open_positions, regime_factor)` 控制本周最多开几个仓以及每个仓的资金上限系数。
 
@@ -123,7 +123,7 @@
 - [ ] **Step 3：Commit**
 
   ```bash
-  git add strategies/complete_flow_system.py
+  git add strategies/trend/complete_flow_system.py
   git commit -m "feat: 新增 get_market_regime() 大盘环境分档函数"
   ```
 
@@ -132,7 +132,7 @@
 ### Task 3：新增 `calc_momentum_score()` 函数
 
 **Files:**
-- Modify: `strategies/complete_flow_system.py`（在 `get_signal()` 函数之前插入；Task 5 会删除 `get_signal()`）
+- Modify: `strategies/trend/complete_flow_system.py`（在 `get_signal()` 函数之前插入；Task 5 会删除 `get_signal()`）
 
 **背景：** 对每个 ETF 计算 0～100 的综合动量评分，三个子项：突破强度（40分）+ RSI强度（30分）+ 均线斜率（30分）。
 
@@ -202,7 +202,7 @@
 - [ ] **Step 3：Commit**
 
   ```bash
-  git add strategies/complete_flow_system.py
+  git add strategies/trend/complete_flow_system.py
   git commit -m "feat: 新增 calc_momentum_score() 三分项动量评分函数"
   ```
 
@@ -215,7 +215,7 @@
 ### Task 4：更新 `calc_trade_value()` 签名
 
 **Files:**
-- Modify: `strategies/complete_flow_system.py:223-230`
+- Modify: `strategies/trend/complete_flow_system.py:223-230`
 
 **背景：** 增加 `regime_factor` 参数，`slot_cap` 乘以该系数，使熊市/震荡期每个槽位的资金上限相应收缩。
 
@@ -260,7 +260,7 @@
 - [ ] **Step 4：Commit**
 
   ```bash
-  git add strategies/complete_flow_system.py
+  git add strategies/trend/complete_flow_system.py
   git commit -m "feat: calc_trade_value 增加 regime_factor 参数支持动态仓位缩放"
   ```
 
@@ -269,7 +269,7 @@
 ### Task 5：重写 `rebalance()` 整合所有新逻辑
 
 **Files:**
-- Modify: `strategies/complete_flow_system.py`（`rebalance()` 函数全部替换；因前置任务插入了新函数，实际行号会偏移，以函数名定位而非行号）
+- Modify: `strategies/trend/complete_flow_system.py`（`rebalance()` 函数全部替换；因前置任务插入了新函数，实际行号会偏移，以函数名定位而非行号）
 
 **背景：** 这是最核心的改动。按照 spec 中的执行顺序，整合 `get_market_regime()`、新趋势过滤、`calc_momentum_score()` 排序候选、Step 10 加仓更新。
 
@@ -427,7 +427,7 @@
 - [ ] **Step 3：Commit**
 
   ```bash
-  git add strategies/complete_flow_system.py
+  git add strategies/trend/complete_flow_system.py
   git commit -m "feat: rebalance() 整合市场环境分档、动量评分排序、加仓逻辑更新"
   ```
 
@@ -436,7 +436,7 @@
 ### Task 6：删除废弃的 `get_signal()` 函数
 
 **Files:**
-- Modify: `strategies/complete_flow_system.py`
+- Modify: `strategies/trend/complete_flow_system.py`
 
 **背景：** `get_signal()` 已被 `calc_momentum_score()` 完全替代，在 `rebalance()` 中不再被调用，需删除避免混淆。
 
@@ -499,7 +499,7 @@
 - [ ] **Step 4：Commit**
 
   ```bash
-  git add strategies/complete_flow_system.py
+  git add strategies/trend/complete_flow_system.py
   git commit -m "refactor: 删除废弃的 get_signal() 函数"
   ```
 
@@ -512,7 +512,7 @@
 ### Task 7：代码完整性验证
 
 **Files:**
-- Read: `strategies/complete_flow_system.py`
+- Read: `strategies/trend/complete_flow_system.py`
 
 - [ ] **Step 1：检查无遗留 `get_signal` 引用**
 
@@ -537,7 +537,7 @@
 - [ ] **Step 4：Commit（如有任何小修正）**
 
   ```bash
-  git add strategies/complete_flow_system.py
+  git add strategies/trend/complete_flow_system.py
   git commit -m "fix: 代码完整性修正"
   ```
 
@@ -547,7 +547,7 @@
 
 **背景：** 该策略依赖 JoinQuant 平台 API（`attribute_history`、`order_target_value` 等），无法在本地运行单元测试，最终验证需在 JoinQuant 回测环境中进行。
 
-- [ ] **Step 1：将 `strategies/complete_flow_system.py` 完整内容粘贴到 JoinQuant 策略编辑器**
+- [ ] **Step 1：将 `strategies/trend/complete_flow_system.py` 完整内容粘贴到 JoinQuant 策略编辑器**
 
 - [ ] **Step 2：设置回测参数**
 
@@ -566,6 +566,6 @@
 - [ ] **Step 4：若回测指标符合预期，最终 commit**
 
   ```bash
-  git add strategies/complete_flow_system.py
+  git add strategies/trend/complete_flow_system.py
   git commit -m "feat: complete_flow_system v4 - 动量评分+大盘分档控仓优化"
   ```

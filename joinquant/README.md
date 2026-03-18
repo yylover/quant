@@ -6,16 +6,16 @@
 
 | 策略 | 文件 | 说明 |
 |------|------|------|
-| 双均线 | `strategies/ma_crossover.py` | 短期均线上穿长期均线买入，下穿卖出；可调短/长周期与过滤阈值 |
-| 动量 | `strategies/momentum.py` | 基于 N 日收益率动量，配合均线过滤，动量为正且价格在均线上方做多 |
+| 双均线 | `strategies/trend/ma_crossover.py` | 短期均线上穿长期均线买入，下穿卖出；可调短/长周期与过滤阈值 |
+| 动量 | `strategies/trend/momentum.py` | 基于 N 日收益率动量，配合均线过滤，动量为正且价格在均线上方做多 |
 | 布林带 | `strategies/bollinger_bands.py` | 价格触及下轨附近买入，触及上轨附近卖出 |
 | RSI | `strategies/rsi_strategy.py` | RSI < 超卖线买入，RSI > 超买线卖出 |
 | **MACD** | `strategies/macd_strategy.py` | DIF 上穿 DEA 且柱状图非负时买入，死叉或柱状转负时卖出 |
-| **突破** | `strategies/breakout.py` | 突破 N 日新高买入，跌破 N 日新低或移动止损卖出 |
+| **突破** | `strategies/trend/breakout.py` | 突破 N 日新高买入，跌破 N 日新低或移动止损卖出 |
 | **均值回归** | `strategies/mean_reversion.py` | 价格偏离均线超过 k 倍标准差时反向操作（超卖买、超买卖出） |
 | **网格** | `strategies/grid_trading.py` | 在价格区间内分档，越跌仓位越高、越涨仓位越低，赚波动价差 |
-| **量价** | `strategies/volume_ma.py` | 放量突破均线时买入，跌破均线时卖出 |
-| **完整流程系统** | `strategies/complete_flow_system.py` | 按「最完善交易流程图」10 步：辨趋势→判方向→找位置→看信号→定止损→定仓位→看空间→开仓→平仓→加仓，可运行可回测 |
+| **量价** | `strategies/trend/volume_ma.py` | 放量突破均线时买入，跌破均线时卖出 |
+| **完整流程系统** | `strategies/trend/complete_flow_system.py` | 按「最完善交易流程图」10 步：辨趋势→判方向→找位置→看信号→定止损→定仓位→看空间→开仓→平仓→加仓，可运行可回测 |
 
 ## 策略能盈利吗？怎么测试？
 
@@ -24,7 +24,7 @@
 **推荐测试方式**：在 **聚宽网站** 回测（本策略按聚宽 API 编写）：
 
 1. 登录 [聚宽](https://www.joinquant.com) → 进入 **「回测」**。
-2. 新建回测，把对应策略的 **完整代码**（如 `strategies/ma_crossover.py`）复制到编辑器。
+2. 新建回测，把对应策略的 **完整代码**（如 `strategies/trend/ma_crossover.py`）复制到编辑器。
 3. 设置 **回测区间**（建议至少 2–3 年）、**初始资金**、**频率选「日」**。
 4. 点击 **「运行回测」**，看收益曲线、年化收益、最大回撤、夏普比率、胜率等。
 

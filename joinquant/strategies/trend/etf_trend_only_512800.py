@@ -33,7 +33,7 @@ def initialize(context):
     g.symbol = '512800.XSHG'
 
     # 趋势参数：长期均线 MA60
-    g.long_ma = 60
+    g.long_ma = 20
 
     # 最大单标的仓位 = 100% 资产
     g.max_pos_pct = 1.0

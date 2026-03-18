@@ -1,7 +1,7 @@
 # complete_flow_system.py 优化设计文档
 
 **日期：** 2026-03-17
-**文件：** `strategies/complete_flow_system.py`
+**文件：** `strategies/trend/complete_flow_system.py`
 **目标：** 提升年化收益率，回撤控制在20%以内
 
 ---

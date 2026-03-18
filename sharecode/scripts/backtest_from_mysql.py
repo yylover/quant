@@ -44,6 +44,7 @@ def parse_args() -> argparse.Namespace:
             "rsi_reversion",
             "timing_ma",
             "macd",
+            "ema_slope_trend",
             "donchian",
             "momentum",
             "ma_slope",
@@ -73,6 +74,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--macd-fast", type=int, default=12)
     p.add_argument("--macd-slow", type=int, default=26)
     p.add_argument("--macd-signal", type=int, default=9)
+    # EMA slope-trend params
+    p.add_argument("--buy-ema", type=int, default=2)
+    p.add_argument("--slope-n", type=int, default=21)
+    p.add_argument("--slope-scale", type=float, default=20.0)
+    p.add_argument("--sell-ema", type=int, default=42)
+    p.add_argument("--confirm", action="store_true")
+    p.add_argument("--no-confirm", action="store_true")
+    p.add_argument("--guide-ema2", type=int, default=2)
+    p.add_argument("--boundary-ma", type=int, default=27)
     # Donchian params
     p.add_argument("--entry-n", type=int, default=20)
     p.add_argument("--exit-n", type=int, default=10)
@@ -207,6 +217,13 @@ def main() -> None:
         macd_fast=args.macd_fast,
         macd_slow=args.macd_slow,
         macd_signal=args.macd_signal,
+        buy_ema=args.buy_ema,
+        slope_n=args.slope_n,
+        slope_scale=args.slope_scale,
+        sell_ema=args.sell_ema,
+        confirm=not args.no_confirm,
+        guide_ema2=args.guide_ema2,
+        boundary_ma=args.boundary_ma,
         entry_n=args.entry_n,
         exit_n=args.exit_n,
         lookback=args.lookback,
