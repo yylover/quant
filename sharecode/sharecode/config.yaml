@@ -59,9 +59,12 @@ data:
 
 strategy:
   single:
-    strategy: "ma_cross"
-    fast: 10
-    slow: 60
+    # 默认使用更适合银行/红利类的趋势强度策略
+    strategy: "ma_slope"
+    window: 120
+    slope_window: 5
+    enter_slope: 0.0
+    exit_slope: 0.0
     init_cash: 100000.0
     fees: 0.001
     slippage: 0.0005
@@ -73,4 +76,27 @@ strategy:
     rebalance_days: 20
     weight_scheme: "inv_vol"
     max_weight: 0.25
+
+scan:
+  symbol: "512800"
+  exchange: "SSE"
+  interval: "1d"
+  init_cash: 100000.0
+  fees: 0.001
+  slippage: 0.0005
+  grids:
+    supertrend:
+      atr_window: [10, 20, 30, 50]
+      multiplier: [2.0, 2.5, 3.0, 3.5, 4.0]
+    donchian:
+      entry_n: [20, 55]
+      exit_n: [10, 20]
+    ma_slope:
+      window: [60, 120, 200]
+      slope_window: [5, 10]
+      enter_slope: [0.0]
+      exit_slope: [0.0]
+    timing_ma:
+      fast: [20, 60]
+      slow: [120, 200]
 

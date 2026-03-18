@@ -4,14 +4,45 @@ import pandas as pd
 import vectorbt as vbt
 
 
+def _first_col(df: pd.DataFrame, candidates: list[str]) -> str:
+    for c in candidates:
+        if c in df.columns:
+            return c
+    raise KeyError(f"None of columns found: {candidates}. Available: {list(df.columns)}")
+
+
 def _prepare_close(df: pd.DataFrame) -> pd.Series:
     """Normalize AkShare daily DataFrame to a close price Series indexed by date."""
     df = df.copy()
-    df["日期"] = pd.to_datetime(df["日期"])
-    df = df.sort_values("日期")
-    close = df.set_index("日期")["收盘"].astype(float)
+    # AkShare 日线通常使用中文列名，这里把“日期”统一为 datetime 并按时间升序，
+    # 确保后续技术指标与信号生成在“时间轴”上是严格对齐的。
+    date_col = _first_col(df, ["日期", "date"])
+    close_col = _first_col(df, ["收盘", "close"])
+    df[date_col] = pd.to_datetime(df[date_col])
+    df = df.sort_values(date_col)
+    close = df.set_index(date_col)[close_col].astype(float)
     close.name = "close"
     return close
+
+
+def _prepare_ohlc(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize to an OHLC DataFrame indexed by date.
+
+    Supports AkShare Chinese columns and common English columns.
+    Returns columns: open, high, low, close.
+    """
+    df = df.copy()
+    date_col = _first_col(df, ["日期", "date"])
+    open_col = _first_col(df, ["开盘", "open"])
+    high_col = _first_col(df, ["最高", "high"])
+    low_col = _first_col(df, ["最低", "low"])
+    close_col = _first_col(df, ["收盘", "close"])
+
+    df[date_col] = pd.to_datetime(df[date_col])
+    df = df.sort_values(date_col)
+    out = df.set_index(date_col)[[open_col, high_col, low_col, close_col]].astype(float)
+    out.columns = ["open", "high", "low", "close"]
+    return out
 
 
 def ma_cross_signals(df: pd.DataFrame, fast: int = 10, slow: int = 30) -> tuple[pd.Series, pd.Series, pd.Series]:
@@ -22,6 +53,8 @@ def ma_cross_signals(df: pd.DataFrame, fast: int = 10, slow: int = 30) -> tuple[
     if fast >= slow:
         raise ValueError("fast window must be smaller than slow window")
     close = _prepare_close(df)
+    # 趋势跟踪的经典形式：短均线与长均线的“交叉事件”作为入场/出场触发点，
+    # 避免用“短均线始终大于长均线”导致的重复信号。
     fast_ma = vbt.MA.run(close, window=fast)
     slow_ma = vbt.MA.run(close, window=slow)
     entries = fast_ma.ma_crossed_above(slow_ma)
@@ -40,10 +73,12 @@ def bollinger_breakout_signals(
     """
     close = _prepare_close(df)
     bb = vbt.BBANDS.run(close, window=window, std=n_std)
-    # breakout: yesterday close <= upper_band and today close > upper_band
+    # 仅在“从下向上突破上轨”的那一天触发入场：
+    # 用 shift(1) 判断“昨天还在上轨下方”，避免价格持续在上轨上方时重复入场。
     prev_below = close.shift(1) <= bb.upper.shift(1)
     now_above = close > bb.upper
     entries = prev_below & now_above
+    # 出场这里用“跌破中轨”作为趋势转弱/回撤保护的近似规则（可根据偏好改为下轨/上轨）。
     exits = close < bb.middle
     return close, entries, exits
 
@@ -59,9 +94,11 @@ def bollinger_reversion_signals(
     """
     close = _prepare_close(df)
     bb = vbt.BBANDS.run(close, window=window, std=n_std)
+    # 均值回归：只在“首次跌破下轨”的那一天入场（而不是每一天都满足 close < 下轨都入场）。
     prev_above = close.shift(1) >= bb.lower.shift(1)
     now_below = close < bb.lower
     entries = prev_above & now_below
+    # 回到中轨即可认为“均值回归完成”，在此处离场。
     exits = close >= bb.middle
     return close, entries, exits
 
@@ -78,6 +115,9 @@ def rsi_reversion_signals(
     """
     close = _prepare_close(df)
     rsi = vbt.RSI.run(close, window=window).rsi
+    # RSI 信号是“状态型阈值”，本实现会在 RSI 连续低于/高于阈值期间保持为 True，
+    # vectorbt 会按持仓状态处理，通常不会重复开仓，但如果你希望“仅触发一次”，
+    # 可以改成用 shift(1) 做阈值穿越事件。
     entries = rsi < low
     exits = rsi > high
     return close, entries, exits
@@ -88,6 +128,7 @@ def timing_ma_signals(df: pd.DataFrame, fast: int = 20, slow: int = 60) -> tuple
 
     Uses MA crossover to switch between full long and flat.
     """
+    # 与 ma_cross_signals 复用同一信号逻辑；区别只在于语义：用于“择时是否持有”。
     return ma_cross_signals(df, fast=fast, slow=slow)
 
 
@@ -104,9 +145,168 @@ def macd_trend_signals(
     if fast >= slow:
         raise ValueError("fast window must be smaller than slow window")
     close = _prepare_close(df)
+    # MACD 指标默认常用参数是 (12, 26, 9)，这里允许自定义窗口，
+    # 并用“MACD 线与 signal 线的交叉事件”作为入场/出场信号。
     macd_ind = vbt.MACD.run(close, fast_window=fast, slow_window=slow, signal_window=signal)
     entries = macd_ind.macd_crossed_above(macd_ind.signal)
     exits = macd_ind.macd_crossed_below(macd_ind.signal)
+    return close, entries, exits
+
+
+def donchian_breakout_signals(
+    df: pd.DataFrame,
+    entry_n: int = 20,
+    exit_n: int = 10,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Donchian channel breakout (turtle-style).
+
+    - Entry: today's close breaks above the *previous* N-day high (use shift(1) to avoid lookahead).
+    - Exit: today's close breaks below the *previous* M-day low.
+    """
+    if entry_n <= 1 or exit_n <= 1:
+        raise ValueError("entry_n and exit_n must be > 1")
+    ohlc = _prepare_ohlc(df)
+    close = ohlc["close"]
+    prev_high = ohlc["high"].rolling(entry_n).max().shift(1)
+    prev_low = ohlc["low"].rolling(exit_n).min().shift(1)
+    entries = close > prev_high
+    exits = close < prev_low
+    return close, entries, exits
+
+
+def momentum_roc_signals(
+    df: pd.DataFrame,
+    lookback: int = 60,
+    enter_th: float = 0.0,
+    exit_th: float = 0.0,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Momentum trend strategy using ROC (rate of change).
+
+    ROC = close / close.shift(lookback) - 1
+    - Entry: ROC crosses above enter_th
+    - Exit: ROC crosses below exit_th
+    """
+    if lookback <= 1:
+        raise ValueError("lookback must be > 1")
+    close = _prepare_close(df)
+    roc = close / close.shift(lookback) - 1.0
+    entries = roc.vbt.crossed_above(enter_th)
+    exits = roc.vbt.crossed_below(exit_th)
+    return close, entries, exits
+
+
+def ma_slope_signals(
+    df: pd.DataFrame,
+    window: int = 60,
+    slope_window: int = 5,
+    enter_slope: float = 0.0,
+    exit_slope: float = 0.0,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Trend strength via moving-average slope.
+
+    - Compute MA(window)
+    - Slope approx: (ma - ma.shift(slope_window)) / slope_window
+    - Entry: slope crosses above enter_slope AND close > MA
+    - Exit: slope crosses below exit_slope OR close < MA
+    """
+    if window <= 1 or slope_window <= 0:
+        raise ValueError("window must be > 1 and slope_window must be > 0")
+    close = _prepare_close(df)
+    ma = vbt.MA.run(close, window=window).ma
+    slope = (ma - ma.shift(slope_window)) / float(slope_window)
+    entries = slope.vbt.crossed_above(enter_slope) & (close > ma)
+    exits = slope.vbt.crossed_below(exit_slope) | (close < ma)
+    return close, entries, exits
+
+
+def bb_squeeze_breakout_signals(
+    df: pd.DataFrame,
+    window: int = 20,
+    n_std: float = 2.0,
+    squeeze_q: float = 0.2,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Bollinger Band squeeze -> breakout strategy.
+
+    - Define bandwidth = (upper - lower) / middle
+    - "Squeeze" when bandwidth <= rolling quantile(squeeze_q) over the same window
+    - Entry: after a squeeze, close breaks above upper band
+    - Exit: close falls below middle band
+    """
+    if not (0.0 < squeeze_q < 1.0):
+        raise ValueError("squeeze_q must be between 0 and 1")
+    close = _prepare_close(df)
+    bb = vbt.BBANDS.run(close, window=window, std=n_std)
+    bandwidth = (bb.upper - bb.lower) / bb.middle.replace(0.0, pd.NA)
+    squeeze_th = bandwidth.rolling(window).quantile(squeeze_q)
+    squeeze_on = bandwidth <= squeeze_th
+    entries = squeeze_on.shift(1).fillna(False) & (close > bb.upper)
+    exits = close < bb.middle
+    return close, entries, exits
+
+
+def supertrend_signals(
+    df: pd.DataFrame,
+    atr_window: int = 10,
+    multiplier: float = 3.0,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """SuperTrend (ATR-band) trend-following strategy.
+
+    Uses HL2 +/- multiplier * ATR bands and an iterative trend state.
+    Entry when trend flips to up; exit when flips to down.
+    """
+    if atr_window <= 1:
+        raise ValueError("atr_window must be > 1")
+    ohlc = _prepare_ohlc(df)
+    high = ohlc["high"]
+    low = ohlc["low"]
+    close = ohlc["close"]
+
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr = tr.rolling(atr_window).mean()
+
+    hl2 = (high + low) / 2.0
+    upper_basic = hl2 + multiplier * atr
+    lower_basic = hl2 - multiplier * atr
+
+    upper_final = upper_basic.copy()
+    lower_final = lower_basic.copy()
+    for i in range(1, len(close)):
+        idx = close.index[i]
+        prev_idx = close.index[i - 1]
+        if pd.notna(upper_final.loc[prev_idx]) and pd.notna(upper_basic.loc[idx]):
+            upper_final.loc[idx] = (
+                min(upper_basic.loc[idx], upper_final.loc[prev_idx])
+                if close.loc[prev_idx] <= upper_final.loc[prev_idx]
+                else upper_basic.loc[idx]
+            )
+        if pd.notna(lower_final.loc[prev_idx]) and pd.notna(lower_basic.loc[idx]):
+            lower_final.loc[idx] = (
+                max(lower_basic.loc[idx], lower_final.loc[prev_idx])
+                if close.loc[prev_idx] >= lower_final.loc[prev_idx]
+                else lower_basic.loc[idx]
+            )
+
+    trend_up = pd.Series(False, index=close.index, dtype=bool)
+    for i in range(1, len(close)):
+        idx = close.index[i]
+        prev_idx = close.index[i - 1]
+        if not trend_up.loc[prev_idx]:
+            trend_up.loc[idx] = close.loc[idx] > upper_final.loc[idx] if pd.notna(upper_final.loc[idx]) else False
+        else:
+            trend_up.loc[idx] = close.loc[idx] >= lower_final.loc[idx] if pd.notna(lower_final.loc[idx]) else False
+
+    # Use shift(..., fill_value=False) to keep dtype stable (avoid future downcasting warnings)
+    prev_trend = trend_up.shift(1, fill_value=False)
+    entries = trend_up & (~prev_trend)
+    exits = (~trend_up) & prev_trend
     return close, entries, exits
 
 
@@ -124,13 +324,26 @@ def dispatch_signals(
     macd_fast: int = 12,
     macd_slow: int = 26,
     macd_signal: int = 9,
+    entry_n: int = 20,
+    exit_n: int = 10,
+    lookback: int = 60,
+    enter_th: float = 0.0,
+    exit_th: float = 0.0,
+    slope_window: int = 5,
+    enter_slope: float = 0.0,
+    exit_slope: float = 0.0,
+    squeeze_q: float = 0.2,
+    atr_window: int = 10,
+    multiplier: float = 3.0,
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
     """Dispatch to the correct signal function by strategy name.
 
     Returns (close, entries, exits).
     Supported strategy names: ma_cross, boll_breakout, boll_reversion,
-    rsi_reversion, timing_ma, macd.
+    rsi_reversion, timing_ma, macd,
+    donchian, momentum, ma_slope, bb_squeeze, supertrend.
     """
+    # 统一入口：方便 CLI/一键脚本按字符串策略名调用，并集中管理各策略参数默认值。
     if strategy == "ma_cross":
         return ma_cross_signals(df, fast=fast, slow=slow)
     if strategy == "boll_breakout":
@@ -143,5 +356,25 @@ def dispatch_signals(
         return timing_ma_signals(df, fast=fast, slow=slow)
     if strategy == "macd":
         return macd_trend_signals(df, fast=macd_fast, slow=macd_slow, signal=macd_signal)
-    raise ValueError(f"Unknown strategy: {strategy!r}. Choose from: ma_cross, boll_breakout, boll_reversion, rsi_reversion, timing_ma, macd")
+    if strategy == "donchian":
+        return donchian_breakout_signals(df, entry_n=entry_n, exit_n=exit_n)
+    if strategy == "momentum":
+        return momentum_roc_signals(df, lookback=lookback, enter_th=enter_th, exit_th=exit_th)
+    if strategy == "ma_slope":
+        return ma_slope_signals(
+            df,
+            window=window,
+            slope_window=slope_window,
+            enter_slope=enter_slope,
+            exit_slope=exit_slope,
+        )
+    if strategy == "bb_squeeze":
+        return bb_squeeze_breakout_signals(df, window=window, n_std=n_std, squeeze_q=squeeze_q)
+    if strategy == "supertrend":
+        return supertrend_signals(df, atr_window=atr_window, multiplier=multiplier)
+    raise ValueError(
+        "Unknown strategy: "
+        f"{strategy!r}. Choose from: ma_cross, boll_breakout, boll_reversion, rsi_reversion, "
+        "timing_ma, macd, donchian, momentum, ma_slope, bb_squeeze, supertrend"
+    )
 
