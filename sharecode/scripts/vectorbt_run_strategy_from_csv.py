@@ -24,6 +24,8 @@ def parse_args() -> argparse.Namespace:
             "boll_breakout",
             "boll_reversion",
             "rsi_reversion",
+            "zscore_reversion",
+            "deviation_reversion",
             "timing_ma",
             "macd",
             "ema_slope_trend",
@@ -46,6 +48,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--rsi-window", type=int, default=14)
     p.add_argument("--rsi-low", type=float, default=30.0)
     p.add_argument("--rsi-high", type=float, default=70.0)
+    # Z-score params
+    p.add_argument("--z-window", type=int, default=60)
+    p.add_argument("--z-k", type=float, default=2.0)
+    p.add_argument("--z-exit", type=float, default=0.0)
+    # Deviation params
+    p.add_argument("--dev-ma-window", type=int, default=20)
+    p.add_argument("--dev-entry", type=float, default=0.05)
+    p.add_argument("--dev-exit", type=float, default=0.0)
     # MACD params
     p.add_argument("--macd-fast", type=int, default=12)
     p.add_argument("--macd-slow", type=int, default=26)
@@ -77,6 +87,12 @@ def main() -> None:
         rsi_window=args.rsi_window,
         rsi_low=args.rsi_low,
         rsi_high=args.rsi_high,
+        z_window=args.z_window,
+        z_k=args.z_k,
+        z_exit=args.z_exit,
+        dev_ma_window=args.dev_ma_window,
+        dev_entry=args.dev_entry,
+        dev_exit=args.dev_exit,
         macd_fast=args.macd_fast,
         macd_slow=args.macd_slow,
         macd_signal=args.macd_signal,

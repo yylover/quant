@@ -129,6 +129,24 @@ def main() -> None:
                 "--rsi-high",
                 str(strat_single.get("rsi_high", 70.0)),
             ]
+        elif strat_single["strategy"] == "zscore_reversion":
+            backtest_cmd += [
+                "--z-window",
+                str(strat_single.get("z_window", 60)),
+                "--z-k",
+                str(strat_single.get("z_k", 2.0)),
+                "--z-exit",
+                str(strat_single.get("z_exit", 0.0)),
+            ]
+        elif strat_single["strategy"] == "deviation_reversion":
+            backtest_cmd += [
+                "--dev-ma-window",
+                str(strat_single.get("dev_ma_window", 20)),
+                "--dev-entry",
+                str(strat_single.get("dev_entry", 0.05)),
+                "--dev-exit",
+                str(strat_single.get("dev_exit", 0.0)),
+            ]
         elif strat_single["strategy"] == "macd":
             backtest_cmd += [
                 "--macd-fast",

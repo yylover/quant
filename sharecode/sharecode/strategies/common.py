@@ -153,17 +153,11 @@ def bollinger_reversion_signals(
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
     """Bollinger Bands mean-reversion strategy.
 
-    Buy when price drops below lower band; sell when price returns to middle band.
+    Logic moved to `mean_reversion.py` to keep strategy categories separated.
     """
-    close = _prepare_close(df)
-    bb = vbt.BBANDS.run(close, window=window, std=n_std)
-    # 均值回归：只在“首次跌破下轨”的那一天入场（而不是每一天都满足 close < 下轨都入场）。
-    prev_above = close.shift(1) >= bb.lower.shift(1)
-    now_below = close < bb.lower
-    entries = prev_above & now_below
-    # 回到中轨即可认为“均值回归完成”，在此处离场。
-    exits = close >= bb.middle
-    return close, entries, exits
+    from sharecode.strategies.mean_reversion import bollinger_reversion_signals as _fn
+
+    return _fn(df, window=window, n_std=n_std)
 
 
 def rsi_reversion_signals(
@@ -174,16 +168,35 @@ def rsi_reversion_signals(
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
     """RSI mean-reversion strategy.
 
-    Buy when RSI < low; sell when RSI > high.
+    Logic moved to `mean_reversion.py` to keep strategy categories separated.
     """
-    close = _prepare_close(df)
-    rsi = vbt.RSI.run(close, window=window).rsi
-    # RSI 信号是“状态型阈值”，本实现会在 RSI 连续低于/高于阈值期间保持为 True，
-    # vectorbt 会按持仓状态处理，通常不会重复开仓，但如果你希望“仅触发一次”，
-    # 可以改成用 shift(1) 做阈值穿越事件。
-    entries = rsi < low
-    exits = rsi > high
-    return close, entries, exits
+    from sharecode.strategies.mean_reversion import rsi_reversion_signals as _fn
+
+    return _fn(df, window=window, low=low, high=high)
+
+
+def zscore_reversion_signals(
+    df: pd.DataFrame,
+    window: int = 60,
+    k: float = 2.0,
+    exit_z: float = 0.0,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Z-Score mean-reversion strategy (wrapper)."""
+    from sharecode.strategies.mean_reversion import zscore_reversion_signals as _fn
+
+    return _fn(df, window=window, k=k, exit_z=exit_z)
+
+
+def deviation_reversion_signals(
+    df: pd.DataFrame,
+    ma_window: int = 20,
+    entry_dev: float = 0.05,
+    exit_dev: float = 0.0,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Deviation (close/MA) mean-reversion strategy (wrapper)."""
+    from sharecode.strategies.mean_reversion import deviation_reversion_signals as _fn
+
+    return _fn(df, ma_window=ma_window, entry_dev=entry_dev, exit_dev=exit_dev)
 
 
 def timing_ma_signals(df: pd.DataFrame, fast: int = 20, slow: int = 60) -> tuple[pd.Series, pd.Series, pd.Series]:
@@ -398,6 +411,14 @@ def dispatch_signals(
     squeeze_q: float = 0.2,
     atr_window: int = 10,
     multiplier: float = 3.0,
+    # Z-score mean reversion params
+    z_window: int = 60,
+    z_k: float = 2.0,
+    z_exit: float = 0.0,
+    # Deviation (close/MA) mean reversion params
+    dev_ma_window: int = 20,
+    dev_entry: float = 0.05,
+    dev_exit: float = 0.0,
     # EMA slope-trend params
     buy_ema: int = 2,
     slope_n: int = 21,
@@ -411,7 +432,7 @@ def dispatch_signals(
 
     Returns (close, entries, exits).
     Supported strategy names: ma_cross, boll_breakout, boll_reversion,
-    rsi_reversion, timing_ma, macd,
+    rsi_reversion, zscore_reversion, deviation_reversion, timing_ma, macd,
     donchian, momentum, ma_slope, bb_squeeze, supertrend, ema_slope_trend.
     """
     # 统一入口：方便 CLI/一键脚本按字符串策略名调用，并集中管理各策略参数默认值。
@@ -454,9 +475,18 @@ def dispatch_signals(
         return bb_squeeze_breakout_signals(df, window=window, n_std=n_std, squeeze_q=squeeze_q)
     if strategy == "supertrend":
         return supertrend_signals(df, atr_window=atr_window, multiplier=multiplier)
+    if strategy == "zscore_reversion":
+        return zscore_reversion_signals(df, window=z_window, k=z_k, exit_z=z_exit)
+    if strategy == "deviation_reversion":
+        return deviation_reversion_signals(
+            df,
+            ma_window=dev_ma_window,
+            entry_dev=dev_entry,
+            exit_dev=dev_exit,
+        )
     raise ValueError(
         "Unknown strategy: "
-        f"{strategy!r}. Choose from: ma_cross, boll_breakout, boll_reversion, rsi_reversion, "
+        f"{strategy!r}. Choose from: ma_cross, boll_breakout, boll_reversion, rsi_reversion, zscore_reversion, deviation_reversion, "
         "timing_ma, macd, ema_slope_trend, donchian, momentum, ma_slope, bb_squeeze, supertrend"
     )
 

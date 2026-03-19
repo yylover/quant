@@ -1,10 +1,12 @@
 import itertools
 from pathlib import Path
 import sys
+from urllib.parse import quote_plus
 
 import pandas as pd
 import pymysql
 import yaml
+from sqlalchemy import create_engine, text
 
 # Ensure local package root (../sharecode) is importable
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,28 +67,33 @@ def connect_db(host: str, port: int, user: str, password: str, database: str) ->
     )
 
 
-def get_instrument_id(conn: pymysql.connections.Connection, symbol: str, exchange: str) -> int:
+def build_engine(host: str, port: int, user: str, password: str, database: str):
+    pwd = quote_plus(password or "")
+    url = f"mysql+pymysql://{user}:{pwd}@{host}:{port}/{database}?charset=utf8mb4"
+    return create_engine(url, pool_pre_ping=True)
+
+
+def get_instrument_id(engine, symbol: str, exchange: str) -> int:
     symbol_std = f"{symbol}.{ 'SH' if exchange.upper() == 'SSE' else 'SZ' }"
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM instrument WHERE symbol = %s", (symbol_std,))
-        row = cur.fetchone()
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT id FROM instrument WHERE symbol = :symbol"), {"symbol": symbol_std}).fetchone()
         if not row:
             raise RuntimeError(f"instrument {symbol_std} not found in database")
         return int(row[0])
 
 
 def load_ohlc_df(
-    conn: pymysql.connections.Connection,
+    engine,
     instrument_id: int,
     interval: str,
 ) -> pd.DataFrame:
     sql = """
     SELECT ts, open_price, high_price, low_price, close_price
     FROM bar
-    WHERE instrument_id = %s AND `interval` = %s
+    WHERE instrument_id = :instrument_id AND `interval` = :interval
     ORDER BY ts
     """
-    df = pd.read_sql(sql, conn, params=[instrument_id, interval])
+    df = pd.read_sql(sql, con=engine, params={"instrument_id": instrument_id, "interval": interval})
     if df.empty:
         raise RuntimeError("no bar data loaded from database")
     df["ts"] = pd.to_datetime(df["ts"])
@@ -110,18 +117,15 @@ def main() -> None:
     scan = cfg["scan"]
     grids = scan["grids"]
 
-    conn: pymysql.connections.Connection = connect_db(
+    engine = build_engine(
         host=db["host"],
         port=int(db["port"]),
         user=db["user"],
         password=db["password"],
         database=db["name"],
     )
-    try:
-        inst_id = get_instrument_id(conn, scan["symbol"], scan["exchange"])
-        ohlc_df = load_ohlc_df(conn, inst_id, scan["interval"])
-    finally:
-        conn.close()
+    inst_id = get_instrument_id(engine, scan["symbol"], scan["exchange"])
+    ohlc_df = load_ohlc_df(engine, inst_id, scan["interval"])
 
     results: list[dict] = []
 

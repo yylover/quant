@@ -3,10 +3,12 @@ from dataclasses import dataclass
 from typing import Any
 from pathlib import Path
 import sys
+from urllib.parse import quote_plus
 
 import pandas as pd
 import pymysql
 import vectorbt as vbt
+from sqlalchemy import create_engine, text
 
 # Ensure local package root (../sharecode) is importable
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +44,8 @@ def parse_args() -> argparse.Namespace:
             "boll_breakout",
             "boll_reversion",
             "rsi_reversion",
+            "zscore_reversion",
+            "deviation_reversion",
             "timing_ma",
             "macd",
             "ema_slope_trend",
@@ -70,6 +74,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--rsi-window", type=int, default=14)
     p.add_argument("--rsi-low", type=float, default=30.0)
     p.add_argument("--rsi-high", type=float, default=70.0)
+    # Z-score params
+    p.add_argument("--z-window", type=int, default=60)
+    p.add_argument("--z-k", type=float, default=2.0)
+    p.add_argument("--z-exit", type=float, default=0.0)
+    # Deviation params
+    p.add_argument("--dev-ma-window", type=int, default=20)
+    p.add_argument("--dev-entry", type=float, default=0.05)
+    p.add_argument("--dev-exit", type=float, default=0.0)
     # MACD params
     p.add_argument("--macd-fast", type=int, default=12)
     p.add_argument("--macd-slow", type=int, default=26)
@@ -110,30 +122,24 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def connect_db(cfg: DbConfig) -> pymysql.connections.Connection:
-    return pymysql.connect(
-        host=cfg.host,
-        port=cfg.port,
-        user=cfg.user,
-        password=cfg.password,
-        database=cfg.database,
-        charset="utf8mb4",
-        autocommit=False,
-    )
+def build_engine(cfg: DbConfig):
+    # Use SQLAlchemy for pandas.read_sql to avoid warnings and improve compatibility.
+    pwd = quote_plus(cfg.password or "")
+    url = f"mysql+pymysql://{cfg.user}:{pwd}@{cfg.host}:{cfg.port}/{cfg.database}?charset=utf8mb4"
+    return create_engine(url, pool_pre_ping=True)
 
 
-def get_instrument_id(conn: pymysql.connections.Connection, symbol: str, exchange: str) -> int:
+def get_instrument_id(engine, symbol: str, exchange: str) -> int:
     symbol_std = f"{symbol}.{ 'SH' if exchange.upper() == 'SSE' else 'SZ' }"
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM instrument WHERE symbol = %s", (symbol_std,))
-        row: Any = cur.fetchone()
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT id FROM instrument WHERE symbol = :symbol"), {"symbol": symbol_std}).fetchone()
         if not row:
             raise RuntimeError(f"instrument {symbol_std} not found in database")
         return int(row[0])
 
 
 def load_close_series(
-    conn: pymysql.connections.Connection,
+    engine,
     instrument_id: int,
     interval: str,
     start: str,
@@ -143,37 +149,41 @@ def load_close_series(
 
     Prefer `load_ohlc_df` for strategies that need OHLC (e.g. supertrend, donchian).
     """
-    df = load_ohlc_df(conn, instrument_id, interval, start, end)
+    df = load_ohlc_df(engine, instrument_id, interval, start, end)
     s = pd.Series(df["收盘"].astype(float).values, index=pd.to_datetime(df["日期"]), name="close")
     return s
 
 
 def load_ohlc_df(
-    conn: pymysql.connections.Connection,
+    engine,
     instrument_id: int,
     interval: str,
     start: str,
     end: str,
 ) -> pd.DataFrame:
-    sql = """
+    base = """
     SELECT ts, open_price, high_price, low_price, close_price
     FROM bar
-    WHERE instrument_id = %s AND `interval` = %s
-    ORDER BY ts
+    WHERE instrument_id = :instrument_id AND `interval` = :interval
     """
-    params: list[Any] = [instrument_id, interval]
+    conditions: list[str] = []
+    params: dict[str, Any] = {"instrument_id": instrument_id, "interval": interval}
     if start:
-        sql = sql.replace("ORDER BY ts", "AND ts >= %s ORDER BY ts")
-        params.append(start)
+        conditions.append("ts >= :start_ts")
+        params["start_ts"] = start
     if end:
-        sql = sql.replace("ORDER BY ts", "AND ts <= %s ORDER BY ts")
-        params.append(end)
+        conditions.append("ts <= :end_ts")
+        params["end_ts"] = end
+    where = base
+    if conditions:
+        where = where + " AND " + " AND ".join(conditions)
+    sql = where + " ORDER BY ts"
 
-    df = pd.read_sql(sql, conn, params=params)
+    df = pd.read_sql(sql, con=engine, params=params)
     if df.empty:
         raise RuntimeError("no bar data loaded from database")
-    df["ts"] = pd.to_datetime(df["ts"])
     # Convert to the column convention used by strategies (Chinese AkShare-like)
+    df["ts"] = pd.to_datetime(df["ts"])
     out = pd.DataFrame(
         {
             "日期": df["ts"],
@@ -195,12 +205,9 @@ def main() -> None:
         password=args.db_password,
         database=args.db_name,
     )
-    conn = connect_db(db_cfg)
-    try:
-        inst_id = get_instrument_id(conn, args.symbol, args.exchange)
-        ohlc_df = load_ohlc_df(conn, inst_id, args.interval, args.start, args.end)
-    finally:
-        conn.close()
+    engine = build_engine(db_cfg)
+    inst_id = get_instrument_id(engine, args.symbol, args.exchange)
+    ohlc_df = load_ohlc_df(engine, inst_id, args.interval, args.start, args.end)
 
     df_for_signals = ohlc_df
 
@@ -214,6 +221,12 @@ def main() -> None:
         rsi_window=args.rsi_window,
         rsi_low=args.rsi_low,
         rsi_high=args.rsi_high,
+        z_window=args.z_window,
+        z_k=args.z_k,
+        z_exit=args.z_exit,
+        dev_ma_window=args.dev_ma_window,
+        dev_entry=args.dev_entry,
+        dev_exit=args.dev_exit,
         macd_fast=args.macd_fast,
         macd_slow=args.macd_slow,
         macd_signal=args.macd_signal,

@@ -80,6 +80,75 @@ def fetch_etf_hist(symbol: str, start: str, end: str, retries: int, market: str 
     raise last_err  # type: ignore[misc]
 
 
+def fetch_index_hist(symbol: str, start: str, end: str, retries: int) -> pd.DataFrame:
+    """Fetch A-share index history via AkShare.
+
+    Example index: 000300 (沪深300).
+    """
+    def _normalize(df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df
+        rename_map: dict[str, str] = {}
+        if "date" in df.columns:
+            rename_map["date"] = "日期"
+        if "open" in df.columns:
+            rename_map["open"] = "开盘"
+        if "high" in df.columns:
+            rename_map["high"] = "最高"
+        if "low" in df.columns:
+            rename_map["low"] = "最低"
+        if "close" in df.columns:
+            rename_map["close"] = "收盘"
+        if "volume" in df.columns:
+            rename_map["volume"] = "成交量"
+        if "amount" in df.columns:
+            rename_map["amount"] = "成交额"
+        df = df.rename(columns=rename_map)
+        if "日期" in df.columns:
+            df["日期"] = pd.to_datetime(df["日期"])
+            start_ts = pd.to_datetime(start)
+            end_ts = pd.to_datetime(end)
+            df = df[(df["日期"] >= start_ts) & (df["日期"] <= end_ts)]
+        return df
+
+    last_err: Exception | None = None
+    for i in range(retries):
+        # Try each data source independently. Failures in one should not prevent fallbacks.
+        # 1) Eastmoney index_zh_a_hist
+        try:
+            if hasattr(ak, "index_zh_a_hist"):
+                df = ak.index_zh_a_hist(symbol=symbol, period="daily", start_date=start, end_date=end)
+                if not df.empty:
+                    return _normalize(df)
+        except Exception as e1:
+            last_err = e1
+
+        # 2) Eastmoney em index API (likely more stable)
+        try:
+            if hasattr(ak, "stock_zh_index_daily_em"):
+                for prefix in ("sh", "sz"):
+                    df = ak.stock_zh_index_daily_em(symbol=f"{prefix}{symbol}", start_date=start, end_date=end)
+                    if not df.empty:
+                        return _normalize(df)
+        except Exception as e2:
+            last_err = e2
+
+        # 3) Sina legacy fallback
+        try:
+            if hasattr(ak, "stock_zh_index_daily"):
+                for prefix in ("sh", "sz"):
+                    # stock_zh_index_daily expects "sh000xxx"/"sz000xxx"
+                    df = ak.stock_zh_index_daily(symbol=f"{prefix}{symbol}")
+                    if not df.empty:
+                        return _normalize(df)
+        except Exception as e3:
+            last_err = e3
+
+        time.sleep(1.5 * (i + 1))
+
+    raise last_err  # type: ignore[misc]
+
+
 def default_out_path(symbol: str, adjust: str) -> Path:
     base = Path(__file__).resolve().parents[1] / "data"
     base.mkdir(parents=True, exist_ok=True)
@@ -95,8 +164,8 @@ def main() -> None:
     p.add_argument(
         "--sec-type",
         default="stock",
-        choices=["stock", "etf"],
-        help="Security type: stock (A股个股) or etf (场内ETF)",
+        choices=["stock", "etf", "index"],
+        help="Security type: stock (A股个股) / etf (场内ETF) / index (指数，如000300沪深300)",
     )
     p.add_argument(
         "--market",
@@ -111,8 +180,10 @@ def main() -> None:
 
     if args.sec_type == "stock":
         df = fetch_stock_hist(args.symbol, args.start, args.end, args.adjust, args.retries)
-    else:
+    elif args.sec_type == "etf":
         df = fetch_etf_hist(args.symbol, args.start, args.end, args.retries, market=args.market or None)
+    else:
+        df = fetch_index_hist(args.symbol, args.start, args.end, args.retries)
 
     df.to_csv(out, index=False, encoding="utf-8-sig")
 
