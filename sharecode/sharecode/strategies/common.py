@@ -428,12 +428,29 @@ def dispatch_signals(
     guide_ema2: int = 2,
     boundary_ma: int = 27,
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """Dispatch to the correct signal function by strategy name.
+    """策略分发器：根据策略名称调用对应的信号生成函数
 
     Returns (close, entries, exits).
-    Supported strategy names: ma_cross, boll_breakout, boll_reversion,
-    rsi_reversion, zscore_reversion, deviation_reversion, timing_ma, macd,
-    donchian, momentum, ma_slope, bb_squeeze, supertrend, ema_slope_trend.
+
+    支持的趋势策略：
+    - ma_cross: 双均线交叉
+    - timing_ma: 均线择时（指数/ETF）
+    - macd: MACD 趋势
+    - ema_slope_trend: EMA 斜率调整趋势
+    - donchian: 唐奇安通道突破
+    - momentum: ROC 动量
+    - ma_slope: 均线斜率
+    - supertrend: 超级趋势
+    - boll_breakout: 布林带突破
+    - bb_squeeze: 布林带挤压突破
+
+    支持的均值回归策略：
+    - boll_reversion: 布林带均值回归
+    - rsi_reversion: RSI 均值回归
+    - zscore_reversion: Z-Score 均值回归
+    - deviation_reversion: 偏离度均值回归
+
+    提示：趋势策略的完整实现和详细注释请参考 sharecode.strategies.trend_following 模块
     """
     # 统一入口：方便 CLI/一键脚本按字符串策略名调用，并集中管理各策略参数默认值。
     if strategy == "ma_cross":
@@ -486,7 +503,8 @@ def dispatch_signals(
         )
     raise ValueError(
         "Unknown strategy: "
-        f"{strategy!r}. Choose from: ma_cross, boll_breakout, boll_reversion, rsi_reversion, zscore_reversion, deviation_reversion, "
-        "timing_ma, macd, ema_slope_trend, donchian, momentum, ma_slope, bb_squeeze, supertrend"
+        f"{strategy!r}. Choose from: ma_cross, timing_ma, macd, ema_slope_trend, "
+        "donchian, momentum, ma_slope, supertrend, boll_breakout, bb_squeeze, "
+        "boll_reversion, rsi_reversion, zscore_reversion, deviation_reversion"
     )
 
