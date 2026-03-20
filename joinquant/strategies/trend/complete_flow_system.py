@@ -2,32 +2,56 @@
 """
 完整交易系统 v3 - ETF 专用版
 ==================================================
-基于「最完善的交易流程图」10 步，针对 ETF 特性全面重构：
 
-  01 辨趋势  02 判方向  03 找位置  04 看信号  05 定止损
-  06 定仓位  07 看空间  08 开仓    09 平仓    10 加仓
+一、与「流程图 10 步」的对应关系
+--------------------------------
+  01 辨趋势  → get_trend()：20/60 双均线偏离，分 up / down / flat
+  02 判方向  → 只做多：明确 down 则不买；flat/up 可参与（与 v3 放宽一致）
+  03 找位置 → get_support()：上涨用近期前低，震荡用短均线作止损参考
+  04 看信号 → calc_momentum_score()：突破 + RSI 区间 + 均线偏离 合成 0～100 分（非二元 K 线）
+  05 定止损 → calc_stop()：max(支撑-ATR, 入场-3ATR, 入场×92%) 取「最贵」止损价 = 最紧风控
+  06 定仓位 → calc_trade_value()：单笔风险=净值×risk_pct，且不超过「每槽上限×市场环境系数」
+  07 看空间 → check_space()：前高与入场距离 ≥ 1.5×止损距离才开仓
+  08 开仓    → rebalance：每周按得分选前 N 只，order_target_value
+  09 平仓    → check_exit_one()：硬止损 或 浮盈≥3% 后从最高价回撤 10% 离场
+  10 加仓    → rebalance 末尾：浮盈≥3%、趋势非 down、得分≥30，补到目标槽位市值
 
-v2 → v3 核心改进：
-  ① 信号（Step04）：放弃旭日东升/阴包阳（K线形态对ETF无效）
-                    → 改为「20日突破」+「MA多头排列+RSI健康区间」
-  ② 止损（Step05）：1.5×ATR → 3×ATR / 8% 固定止损（减少噪声止损）
-  ③ 出场（Step09）：去掉复杂的减半仓逻辑
-                    → 固定止损 + 从盈利高点回撤 10% 跟踪离场
-  ④ 频率：日度 → 周度（每周一检查），每年最多 ~50 次信号，
-           大幅减少交易成本侵蚀
-  ⑤ 均线周期：10/30 → 20/60（更适合 ETF 的中期趋势）
-  ⑥ 最多持仓：3 → 2（集中持仓，减少分散摩擦）
+二、整体策略分析（定性）
+--------------------------------
+**策略类型**：多标的 ETF 轮动 + 趋势/动量过滤 + 以损定量仓位 + 大盘（沪深300）分档降仓。
 
-ETF 池：
-  512800.XSHG 银行ETF       159208.XSHE 国防ETF
-  515880.XSHG 央企创新ETF   513120.XSHG 恒生科技ETF
-  562500.XSHG 中证A50ETF    515220.XSHG 煤炭ETF
-  159755.XSHE 游戏ETF       588460.XSHG 科创50ETF
-  588050.XSHG 科创板ETF     515400.XSHG 中证1000ETF
-  512480.XSHG 半导体ETF     159819.XSHE 人工智能ETF
-  512690.XSHG 酒ETF         159869.XSHE 新能源ETF
-  512660.XSHG 军工ETF       159928.XSHE 消费ETF
-  512170.XSHG 医疗ETF
+**核心思想**：
+  - 在较大 ETF 池里，每周筛选「趋势非空头 + 动量评分≥30」的标的；
+  - 用较宽止损（3×ATR 与 8% 兜底）减少 ETF 日噪声扫损；
+  - 用沪深300 相对 MA60 划分牛/震/熊：熊市最多 1 只且仓位系数 0.4，控制系统性风险暴露；
+  - 周频调仓降低换手与佣金侵蚀（相对日频）。
+
+**优势**：
+  - 分散行业主题，单只黑天鹅影响有限；大盘差时自动缩仓、减槽位。
+  - 信号可解释（突破、RSI 健康区、均线多头），适合与回测报告对照。
+  - 出场规则简单：止损 + 盈利后跟踪止盈，无复杂分批减仓状态机。
+
+**风险与局限**：
+  - 周频可能错过周内急涨急跌；涨停/流动性差的 ETF 实盘与回测有差异。
+  - 动量评分阈值、权重（40/30/30）与参数存在过拟合可能，需样本外或多区间验证。
+  - JoinQuant 注释已说明：当日发出平仓后 positions 仍可能计到收盘，open_slots 计算偏保守。
+  - set_order_cost 使用股票印花税模型，ETF 实盘通常无印花税，回测偏悲观或需按平台改费用。
+
+**适用场景**：中长期趋势与结构行情、愿意承担一定回撤以换取行业轮动暴露；不适合要求日内精确进出的策略。
+
+三、v2 → v3 核心改进（摘要）
+--------------------------------
+  ① 信号：K 线形态 → 20 日突破 + MA + RSI 合成评分
+  ② 止损：更宽（3×ATR、8% 兜底）
+  ③ 出场：固定止损 + 盈利达标后回撤 10% 跟踪止盈
+  ④ 频率：日度 → 每周一 open
+  ⑤ 均线：10/30 → 20/60
+  ⑥ 持仓槽位：最多 2，且熊市降为 1
+
+四、ETF 池（与 g.etf_pool 一致）
+--------------------------------
+  银行/国防/央企创新/恒生科技/A50/煤炭/游戏/科创50/科创板/中证1000/
+  半导体/人工智能/酒/新能源/军工/消费/医疗 等（代码见 initialize）。
 
 适用于聚宽 JoinQuant 平台回测。
 """
@@ -39,6 +63,7 @@ ETF 池：
 def initialize(context):
     set_benchmark('000300.XSHG')
     set_option('use_real_price', True)
+    # 费用按股票模板：含卖出印花税。纯 ETF 回测若需更贴近实盘可关闭或调低 close_tax（见模块说明）
     set_order_cost(
         OrderCost(open_tax=0, close_tax=0.001,
                   open_commission=0.0003, close_commission=0.0003,
@@ -46,7 +71,7 @@ def initialize(context):
         type='stock'
     )
 
-    # ---------- ETF 池 ----------
+    # ---------- ETF 池（行业/主题分散，单票流动性上市日期以聚宽数据为准）----------
     g.etf_pool = [
         '512800.XSHG',  # 银行ETF
         '159208.XSHE',  # 国防ETF
@@ -70,9 +95,10 @@ def initialize(context):
     # ---------- 01 辨趋势：均线周期 ----------
     g.short_ma        = 20    # 短期均线（20日，约1个月）
     g.long_ma         = 60    # 长期均线（60日，约3个月）
-    g.trend_threshold = 0.003  # 均线偏差阈值（降低，震荡期也可参与）
+    # 短均线高于长均线超过该比例判为 up；低于负阈值判 down；否则 flat（震荡也可交易）
+    g.trend_threshold = 0.003
 
-    # ---------- 04 看信号：ETF适用信号 ----------
+    # ---------- 04 看信号：动量评分三要素（突破 / RSI 健康区 / 均线多头强度）----------
     g.breakout_days = 20      # 突破信号：价格突破N日最高价
     g.rsi_period    = 14
     g.rsi_low       = 45      # RSI健康区间下限（ETF不常跌到超卖区）
@@ -85,9 +111,10 @@ def initialize(context):
 
     # ---------- 06 定仓位 ----------
     g.risk_pct      = 0.015   # 单笔最大风险：净值1.5%
-    g.max_positions = 2       # slot_cap 计算基准（固定为2，不随大盘变化；实际持仓数由 get_market_regime() 动态决定）
+    # 单票「满槽」名义资金≈净值/2×0.95，再乘 regime_factor；实际最多几只由 get_market_regime 返回的 max_open_positions 限制
+    g.max_positions = 2
 
-    # ---------- 07 看空间 ----------
+    # ---------- 07 看空间：潜在止盈空间相对止损腿的长度 ----------
     g.min_reward_ratio = 1.5  # 恢复为 1.5:1，保证盈亏比质量
 
     # ---------- 09 平仓：简化出场逻辑 ----------
@@ -97,10 +124,10 @@ def initialize(context):
     # ---------- 10 加仓 ----------
     g.max_add_times = 1
 
-    # 每个标的独立状态：{security: {'stop': float, 'highest': float, 'add_count': int}}
+    # 每标的独立状态：止损价、持仓期最高价（跟踪止盈用）、已加仓次数
     g.state = {}
 
-    # 每周一检查信号（大幅降低交易频率和手续费）
+    # weekday=1：每周一开盘逻辑；年内调仓次数远少于日频，注意与「周线收盘确认」类定义的差异
     run_weekly(rebalance, weekday=1, time='open')
 
 
@@ -108,7 +135,7 @@ def initialize(context):
 # 01 辨趋势
 # ======================================================
 def get_trend(prices):
-    """均线多头/空头/震荡"""
+    """根据短/长均线相对位置划分 up / down / flat（无价格，仅用均线差）。"""
     close = prices['close']
     if len(close) < g.long_ma + 1:
         return None
@@ -206,7 +233,7 @@ def calc_momentum_score(prices):
 
     current = close.iloc[-1]
 
-    # --- 突破强度 ---
+    # --- 突破强度（40 分）：最近一日收盘相对「不含当日的 breakout_days 日最高价」的超额幅度 ---
     recent_high = high.iloc[-g.breakout_days - 1:-1].max()
     if recent_high > 0:
         breakout_ratio = (current - recent_high) / recent_high
@@ -214,7 +241,7 @@ def calc_momentum_score(prices):
     else:
         breakout_score = 0.0
 
-    # --- RSI强度 ---
+    # --- RSI（30 分）：45～70 线性给分；>70 视为过热，避免追高 ---
     rsi_series = _calc_rsi(close, g.rsi_period)
     rsi = rsi_series.iloc[-1]
     if rsi != rsi:  # NaN check
@@ -224,7 +251,7 @@ def calc_momentum_score(prices):
     else:
         rsi_score = 0.0  # 过热，避免追高
 
-    # --- 均线斜率 ---
+    # --- 均线多头强度（30 分）：短均高于长均的相对幅度，最大按 3% 饱和 ---
     ma_short = close.iloc[-g.short_ma:].mean()
     ma_long  = close.iloc[-g.long_ma:].mean()
     if ma_long > 0:
@@ -249,8 +276,8 @@ def _get_atr(prices):
 
 def calc_stop(entry_price, support, prices):
     """
-    止损 = max(support - 1ATR, entry - 3ATR, entry × 92%)
-    三者取最高（离入场最近），保证止损不会过宽
+    在多个候选止损价中取 max（数值最大 = 离入场价最近的止损线 = 单笔亏损相对最紧）。
+    候选含：支撑下修 1ATR、入场下 3×ATR、入场下 8%。
     """
     atr = _get_atr(prices)
     stops = []
@@ -259,13 +286,14 @@ def calc_stop(entry_price, support, prices):
         if support:
             stops.append(support - atr)
     stops.append(entry_price * (1 - g.fixed_stop_pct))
-    return max(0.01, max(stops))  # 取最近的止损（最高价格）
+    return max(0.01, max(stops))
 
 
 # ======================================================
 # 06 定仓位（以损定量，每槽独立）
 # ======================================================
 def calc_trade_value(portfolio_value, entry_price, stop_price, regime_factor=1.0):
+    """以损定量：目标市值 = (净值×单笔风险比例) / 每股止损空间 × 入场价，且不超过单槽上限×环境系数。"""
     if entry_price <= stop_price or entry_price <= 0:
         return 0
     slot_cap    = portfolio_value / g.max_positions * 0.95 * regime_factor
@@ -279,6 +307,7 @@ def calc_trade_value(portfolio_value, entry_price, stop_price, regime_factor=1.0
 # 07 看空间（盈亏比 >= min_reward_ratio）
 # ======================================================
 def check_space(entry_price, stop_price, prices):
+    """用不含当日的近 n 日最高价近似「上方空间」，需 ≥ min_reward_ratio × 止损距离才允许开仓。"""
     n = min(40, len(prices['high']) - 1)
     if n < 5:
         return True
@@ -341,73 +370,68 @@ def check_exit_one(context, security, prices):
 # 主调仓逻辑（每周一执行）
 # ======================================================
 def rebalance(context):
+    """
+    每周主流程：先大盘分档 → 逐标的检查出场 → 算剩余槽位 →
+    扫描池内未持仓 ETF → 过滤趋势/评分/止损/空间 → 按分排序开仓 → 最后处理加仓。
+    """
     need = max(g.long_ma, g.rsi_period, g.atr_period, g.breakout_days) + 5
 
-    # -------- 市场环境分档 --------
+    # -------- 大盘环境：决定最多几只 + 单槽资金缩放系数 --------
     max_open_positions, regime_factor = get_market_regime()
     log.info('[市场环境] max_open_positions={} regime_factor={:.0%}'.format(
         max_open_positions, regime_factor))
 
-    # -------- 09 平仓优先 --------
+    # -------- 09 平仓优先（有仓的标的先跑止损/跟踪止盈）--------
     for sec in list(context.portfolio.positions.keys()):
         prices = attribute_history(sec, need, '1d', ['open', 'high', 'low', 'close'])
         if prices is None or len(prices) < need:
             continue
         check_exit_one(context, sec, prices)
 
-    # -------- 检查剩余开仓容量 --------
-    # 注意：JoinQuant 平仓订单在当日收盘后才结算，此处 len(positions) 仍含刚发出平仓的标的
-    # 这是平台限制，行为与原策略一致，熊市档下属于保守处理（接受）
+    # -------- 剩余可开新仓槽位 --------
+    # 注意：若本交易日已发平仓，部分环境下 positions 仍可能计到收盘，open_slots 可能暂时为 0（偏保守）
     open_slots = max_open_positions - len(context.portfolio.positions)
     if open_slots <= 0:
         return
 
-    # -------- 扫描 ETF 池，收集满足条件的候选标的 --------
-    # 结构：(score, security, entry_price, stop_price)
-    candidates = []
+    # -------- 扫描池子：未持仓标的 → 趋势/评分/支撑止损/空间 → 候选列表 --------
+    candidates = []  # 元素 (score, security, entry_price, stop_price)
 
     for sec in g.etf_pool:
         if sec in context.portfolio.positions:
-            continue  # 已持有，跳过
+            continue  # 已持有，留给后段加仓逻辑
 
         prices = attribute_history(sec, need, '1d', ['open', 'high', 'low', 'close'])
         if prices is None or len(prices) < need:
             continue
 
-        # 01 辨趋势（放宽：只排除明确空头，震荡期也可参与）
         trend = get_trend(prices)
         if trend == 'down':
-            continue
+            continue  # 02/01：明确空头不参与（只做多）
 
-        # 动量评分（替代原有强/弱二元信号）
         score = calc_momentum_score(prices)
-        # 入场门槛：保持评分 >= 30，聚焦更强趋势
         if score < 30:
-            continue  # 分数不足，跳过
+            continue  # 04：动量不足不进场
 
         entry_price = prices['close'].iloc[-1]
 
-        # 03 找位置（支撑）
         support = get_support(prices, trend)
 
-        # 05 定止损
         stop_price = calc_stop(entry_price, support, prices)
 
-        # 07 看空间
         if not check_space(entry_price, stop_price, prices):
-            continue
+            continue  # 07：上方空间不够盈亏比要求
 
         candidates.append((score, sec, entry_price, stop_price))
 
     if not candidates:
         return
 
-    # 按评分降序排列，取前 open_slots 名
+    # 08：高分优先，填满 open_slots 个新仓
     candidates.sort(key=lambda x: x[0], reverse=True)
     portfolio_value = context.portfolio.portfolio_value
 
     for score, sec, entry_price, stop_price in candidates[:open_slots]:
-        # 06 定仓位（传入 regime_factor）
         trade_val = calc_trade_value(portfolio_value, entry_price, stop_price, regime_factor)
         if trade_val <= 0:
             continue
@@ -417,7 +441,6 @@ def rebalance(context):
         if trade_val <= 0:
             continue
 
-        # 08 开仓
         order_target_value(sec, trade_val)
         g.state[sec] = {
             'stop':      stop_price,
@@ -430,7 +453,7 @@ def rebalance(context):
             regime_factor
         ))
 
-    # -------- 10 加仓：浮盈且再次满足买点 --------
+    # -------- 10 加仓：已有仓、未超加仓次数、浮盈≥3%、趋势与评分仍达标 --------
     for sec in list(context.portfolio.positions.keys()):
         state = g.state.get(sec)
         if not state or state.get('add_count', 0) >= g.max_add_times:
@@ -440,24 +463,22 @@ def rebalance(context):
             continue
 
         current = context.portfolio.positions[sec].price
-        if current <= position.avg_cost * 1.03:  # 至少浮盈3%才考虑加仓
-            continue
+        if current <= position.avg_cost * 1.03:
+            continue  # 与 g.profit_trigger 对齐：无浮盈不加
 
         prices = attribute_history(sec, need, '1d', ['open', 'high', 'low', 'close'])
         if prices is None or len(prices) < need:
             continue
 
-        # 趋势过滤（与新开仓对称：只排除明确空头）
         if get_trend(prices) == 'down':
             continue
-        # 信号过滤（评分 >= 30，与新开仓阈值保持一致）
         if calc_momentum_score(prices) < 30:
             continue
 
         support    = get_support(prices, 'up')
         stop_price = calc_stop(current, support, prices)
 
-        # 加仓量 = 目标槽位价值 − 当前持仓价值（防止超配）
+        # 目标总市值 ≈ 按当前价重算的槽位目标，add_val = 目标 − 现仓，避免一步加过头
         pos_val    = position.value
         target_val = calc_trade_value(portfolio_value, current, stop_price, regime_factor)
         add_val    = max(0, target_val - pos_val)

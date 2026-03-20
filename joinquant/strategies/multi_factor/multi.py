@@ -289,13 +289,3 @@ def trade_func(context):
 
     except:
         return  # 异常时跳过本次交易
-
-# 打分函数（未使用，保留备用）
-def f_sum(x):
-    """
-    计算打分总和（备用函数）
-
-    当前代码中直接使用pandas的sum(axis=1)，
-    该函数暂未被调用，保留以备将来扩展。
-    """
-    return sum(x)
