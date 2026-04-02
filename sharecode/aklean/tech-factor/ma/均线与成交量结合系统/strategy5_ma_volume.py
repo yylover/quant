@@ -61,14 +61,11 @@ class MAVolumeSystem:
         
         for i in range(1, len(self.data)):
             # 开仓条件（必须同时满足）：
-            # 1. 5日均线上穿20日均线
-            # 2. 成交量 > 20日成交量均线
-            # 3. 价格突破前期高点
-            # 4. 价格站在60日均线上方
+            # 1. 5日均线在20日均线上方（多头排列）
+            # 2. 成交量大于20日成交量均线（放量）
+            # 3. 价格站在60日均线上方（趋势向上）
             if (self.data['fast_medium_diff'].iloc[i] > 0 and
-                self.data['fast_medium_diff'].iloc[i-1] <= 0 and
                 self.data['volume_above_ma'].iloc[i] and
-                self.data['price_break_high'].iloc[i] and
                 self.data['price_above_slow'].iloc[i]):
                 self.data.loc[self.data.index[i], 'signal'] = 1
             
@@ -347,10 +344,9 @@ class MAVolumeSystem:
 - **前期高点**：50日高点
 
 ### 开仓条件（必须同时满足）
-1. **5日均线上穿20日均线**：短期趋势转强
-2. **成交量 > 20日成交量均线**：成交量放大确认趋势
-3. **价格突破50日前期高点**：突破重要阻力位
-4. **价格站在60日均线上方**：长期趋势向上
+1. **5日均线在20日均线上方**：快线在中线上方，形成多头排列
+2. **成交量 > 20日成交量均线**：放量上涨，确认上涨动能
+3. **价格站在60日均线上方**：价格位于慢线上方，表明中期趋势向上
 
 ### 平仓条件（满足任一即可）
 1. **5日均线下穿20日均线**：短期趋势反转

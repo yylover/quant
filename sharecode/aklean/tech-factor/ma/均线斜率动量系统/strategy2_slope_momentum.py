@@ -48,21 +48,20 @@ class SlopeMomentumSystem:
         
         for i in range(1, len(self.data)):
             # 开仓条件（必须同时满足）：
-            # 1. 20日均线斜率 > 0.5（趋势强劲向上）
+            # 1. 20日均线斜率 > 0.1（趋势向上）
             # 2. RSI > 50（动量向上）
-            # 3. 价格上穿20日均线
-            if (self.data['ma_slope'].iloc[i] > 0.5 and
+            # 3. 价格在均线上方
+            if (self.data['ma_slope'].iloc[i] > 0.1 and
                 self.data['rsi'].iloc[i] > 50 and
-                self.data['price_above_ma'].iloc[i] and
-                not self.data['price_above_ma'].iloc[i-1]):
+                self.data['price_above_ma'].iloc[i]):
                 self.data.loc[self.data.index[i], 'signal'] = 1
             
             # 平仓条件（满足任一即可）：
             # 1. 20日均线斜率< 0（趋势反转）
-            # 2. RSI < 50（动量转弱）
-            # 3. 价格跌破20日均线
+            # 2. RSI < 45（动量转弱）
+            # 3. 价格跌破均线
             elif (self.data['ma_slope'].iloc[i]< 0 or
-                  self.data['rsi'].iloc[i] < 50 or
+                  self.data['rsi'].iloc[i] < 45 or
                   (self.data['price_below_ma'].iloc[i] and
                    not self.data['price_below_ma'].iloc[i-1])):
                 self.data.loc[self.data.index[i], 'signal'] = -1
@@ -328,13 +327,13 @@ class SlopeMomentumSystem:
 - **动量指标**：RSI(14)
 
 ### 开仓条件（必须同时满足）
-1. **均线斜率 > 0.5**：20日均线斜率 > 0.5，表明趋势强劲向上
+1. **均线斜率 > 0.1**：20日均线斜率 > 0.1，表明趋势向上
 2. **RSI > 50**：相对强弱指数大于50，表明动量向上
-3. **价格上穿均线**：价格从下方突破20日均线
+3. **价格在均线上方**：价格位于20日均线上方
 
 ### 平仓条件（满足任一即可）
 1. **均线斜率< 0**：20日均线斜率小于0，表明趋势反转
-2. **RSI < 50**：相对强弱指数小于50，表明动量转弱
+2. **RSI < 45**：相对强弱指数小于45，表明动量转弱
 3. **价格跌破均线**：价格从上方跌破20日均线
 
 ## 回测结果
