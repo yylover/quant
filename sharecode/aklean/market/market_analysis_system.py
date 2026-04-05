@@ -419,6 +419,19 @@ class MarketAnalysisSystem:
         else:
             continuity = '弱'
         
+        # 判断切换速度（基于领涨板块与领跌板块的涨幅差异）
+        if not industry_top10.empty and not industry_bottom10.empty:
+            top_gain = industry_top10.iloc[0]['涨跌幅']
+            bottom_loss = abs(industry_bottom10.iloc[0]['涨跌幅'])
+            if top_gain - bottom_loss > 4.0:
+                switch_speed = '快'
+            elif top_gain - bottom_loss > 2.0:
+                switch_speed = '中等'
+            else:
+                switch_speed = '慢'
+        else:
+            switch_speed = '中等'
+        
         # 构建梯队（涨幅排序）
         sector_tiers = []
         for idx, row in industry_top10.head(5).iterrows():
@@ -428,6 +441,7 @@ class MarketAnalysisSystem:
             '领涨板块': leading_sectors,
             '领跌板块': falling_sectors,
             '持续性': continuity,
+            '切换速度': switch_speed,
             '梯队': sector_tiers
         }
     
@@ -748,6 +762,7 @@ class MarketAnalysisSystem:
                             '领涨板块': ['新能源', '半导体', 'AI人工智能'],
                             '领跌板块': ['房地产', '建筑材料', '传统能源'],
                             '持续性': '中等',
+                            '切换速度': '中等',
                             '梯队': ['AI人工智能(3.2%)', '新能源(2.5%)', '半导体(1.8%)']
                         },
                         '主线板块': {
