@@ -1,6 +1,32 @@
 # 克隆自聚宽文章：https://www.joinquant.com/post/69347
-# 标题：【五福闹新春】v3.4-5年74倍牛逼普拉斯
-# 作者：烟花三月ETF
+# 标题：【五福闹新春】v3.4 - 作者：烟花三月ETF
+#
+# 以下为原文中的示例回测数字（换区间会变，不代表未来收益）：
+#   策略收益约 8093% / 基准约 22% / Alpha 约 1.04 / Sharpe 约 3.08 / 最大回撤约 22.31%
+#
+"""
+pulasi.py — ETF 动量轮动（「普拉斯」版）策略说明
+================================================
+
+【核心思想】
+  在「固定主题 ETF 池 + 全市场动态行业池」合并后的标的里，用对数价加权回归得到
+  年化收益×R² 的动量得分，叠加 R²、成交量、短期跌幅、溢价率及拉普拉斯/高斯趋势滤波；
+  每日 13:10 调仓，通常只持有 g.holdings_num（默认 1）只；无合格标的时可切货币 ETF 防御。
+
+【一日流程】
+  09:00  morning_routine：持仓检查、回撤记录、全市场流动性阈值、动态池（按名称聚类+成交额）、
+         固定池流动性过滤、合并 merged_etf_pool。
+  13:10  afternoon_routine：震荡期进/出判断 → 动量排名 get_final_ranked_etfs → 先卖后买。
+  15:10  reset_daily_flags：震荡期持续天数等统计。
+  every_bar：分钟级固定止损（相对成本约 5%）与可选的当日跌幅止损（默认关）；仅交易时段执行。
+
+【震荡期】
+  基准 510300：乖离过大、RSI 超买回落、或当日触发止损等可进入「震荡期」，改用高斯滤波；
+  从低点反弹、企稳、或满最长天数等退出，恢复拉普拉斯滤波。
+
+【依赖】
+  聚宽 jqdata；动态池依赖 get_all_securities、get_price 等；回测需足够权限与数据。
+"""
 
 import numpy as np
 import math
@@ -10,7 +36,11 @@ from datetime import datetime, date, timedelta
 
 # ==================== 策略初始化 ====================
 def initialize(context):
-    """初始化策略（设置参数、全局变量、定时任务）"""
+    """初始化：基准/费用/滑点、固定+动态池全局变量、动量与风控参数、定时任务。
+
+    主路径：晨间合并 ETF 池 → 午后算动量与过滤 → 目标持仓 g.holdings_num 只（默认 1）→
+    卖出不在目标内的持仓，再买入缺口；无排名结果且防御 ETF 可用则持有货币 ETF。
+    """
     # ==================== 系统设置 ====================
     set_option("avoid_future_data", True)       # 避免未来函数
     set_option("use_real_price", True)          # 使用真实价格
@@ -241,7 +271,7 @@ def initialize(context):
     run_daily(afternoon_routine, time='13:10')    # 午后交易流水线（13:10）
     run_daily(reset_daily_flags, time='15:10')    # 收盘后重置当日标志（15:10）
     
-    # 【效率优化】使用原生的 every_bar 替换嵌套 for 循环生成的数百个 run_daily
+    # 分钟级止损：every_bar 在回测中每分钟触发；函数内部再限制在 9:25–11:30、13:00–14:57
     run_daily(minute_level_stop_loss, time='every_bar')
     run_daily(minute_level_pct_stop_loss, time='every_bar')
     # 打印策略初始化参数
@@ -894,7 +924,10 @@ def calculate_and_log_ranked_etfs(context):
     final_list = get_final_ranked_etfs(context)
     g.ranked_etfs_result = final_list
 def calculate_momentum_score(price_series, lookback_days):
-    """计算动量得分（【修正版】100%还原 np.polyfit 权重逻辑和原版 R² 算法）"""
+    """动量得分 = 年化近似收益 × R²；价格取对数后加权线性回归，权重近端更大。
+
+    返回: (momentum_score, annualized_returns, r_squared)，不可用则 (None, None, None)。
+    """
     if len(price_series) < lookback_days + 1:
         return None, None, None
         
@@ -1172,7 +1205,10 @@ def apply_filters(metrics_list):
     return filtered
 
 def get_final_ranked_etfs(context):
-    """主筛选函数，从合并池中选出最终排名ETF"""
+    """从 merged_etf_pool 逐只算指标 → apply_filters → Top10 → 阈值缩池 → 与持仓拼接出最终目标。
+
+    历史用 end_date=previous_date 的日线 + 当日分钟成交量与现价；与聚宽 bar 数据一致。
+    """
     all_metrics = []
     etf_set = list(g.merged_etf_pool)
     end_date = context.previous_date
@@ -1357,7 +1393,7 @@ def get_final_ranked_etfs(context):
 
 # ==================== 交易执行 ====================
 def execute_sell_trades(context):
-    """卖出交易逻辑"""
+    """根据 ranked_etfs_result 确定今日目标；无排名时尝试防御 ETF 或空仓。卖出非目标持仓。"""
     log.info("========== 卖出操作开始 ==========")
     ranked_etfs = getattr(g, 'ranked_etfs_result', [])
     target_etfs = []
@@ -1388,7 +1424,7 @@ def execute_sell_trades(context):
     log.info(f"本次共计划卖出{sell_count}只ETF。")
     log.info("========== 卖出操作完成 ==========")
 def execute_buy_trades(context):
-    """买入交易逻辑"""
+    """对目标列表中尚未持有的标的按可用现金均分买入；最后一只用尽剩余现金。涨跌停跳过。"""
     log.info("========== 买入操作开始 ==========")
     target_etfs = g.target_etfs_list
     if not target_etfs:
@@ -1424,7 +1460,7 @@ def execute_buy_trades(context):
             log.info(f"❌ ETF {etf} 下单失败")
     log.info("========== 买入操作完成 ==========")
 def smart_order_target_value(security, target_value, context):
-    """智能下单"""
+    """按手数（100 股）对齐下单；卖出受 T+1 closeable_amount 约束。"""
     current_data = get_current_data()
     security_name = get_security_name(security)
     if current_data[security].paused:
@@ -1471,7 +1507,7 @@ def smart_order_target_value(security, target_value, context):
     return False
 # ==================== 止损函数 ====================
 def minute_level_stop_loss(context):
-    """分钟级固定比例止损"""
+    """相对持仓成本跌破 g.fixedStopLossThreshold（默认 0.95，约亏 5%）则清仓；仅可卖数量>0 时执行。"""
     if not g.use_fixed_stop_loss:
         return
     for security in list(context.portfolio.positions.keys()):
@@ -1510,7 +1546,7 @@ def minute_level_stop_loss(context):
                 log.info(f"✅ 【止损触发】记录今日止损，将在13:10检查并进入震荡期")
 
 def minute_level_pct_stop_loss(context):
-    """分钟级当日跌幅止损"""
+    """相对昨收跌破 g.pct_stop_loss_threshold；默认 g.use_pct_stop_loss=False 关闭。"""
     if not g.use_pct_stop_loss:
         return
     for security in list(context.portfolio.positions.keys()):
@@ -1593,4 +1629,5 @@ def check_defensive_etf_available(context):
     return True
 
 def trade(context):
+    """占位：主逻辑在 morning_routine / afternoon_routine；勿与旧版 handle_data 混用。"""
     pass
