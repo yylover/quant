@@ -31,7 +31,9 @@ pulasi.py — ETF 动量轮动（「普拉斯」版）策略说明
 import numpy as np
 import math
 import pandas as pd
-from jqdata import *
+# from jqdata import *
+# from jqdatasdk import *
+# auth('13126893280','Yq5582037')
 from datetime import datetime, date, timedelta
 
 # ==================== 策略初始化 ====================
@@ -45,7 +47,7 @@ def initialize(context):
     set_option("avoid_future_data", True)       # 避免未来函数
     set_option("use_real_price", True)          # 使用真实价格
     set_slippage(PriceRelatedSlippage(0.0001), type="fund")  # 设置滑点
-    set_order_cost(OrderCost(open_tax=0, close_tax=0, open_commission=0.0001,
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001, open_commission=0,
                               close_commission=0.0001, close_today_commission=0.0001,
                               min_commission=5), type="fund")  # 设置交易费用
     # 日志级别配置
