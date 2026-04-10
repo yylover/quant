@@ -5,4 +5,5 @@ backtrader
 PyMySQL
 PyYAML
 SQLAlchemy
+matplotlib
 
