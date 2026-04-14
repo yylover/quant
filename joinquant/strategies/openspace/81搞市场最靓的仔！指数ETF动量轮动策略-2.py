@@ -6,6 +6,18 @@
 from jqdata import *
 import random
 
+# 
+# 标的池固定 11 只 ETF（A股宽基 + 海外指数 + 商品）。
+# 每天 14:50 执行交易，收盘后打印成交。
+# 始终只持有 1 只 ETF（或空仓）。
+# 动量分数 R：近 3 日（两天收盘 + 当前价）相对“21 日前 3 日均价”的涨幅。
+# 对全池排序，取第一名 ETF_No1。
+
+# 买卖规则
+# 空仓时：若第一名价格 > 21日前价格 * 1.001，买入。
+# 持仓且仍第一：若跌破 21日前价格 * 0.999，卖出空仓；否则继续持有。
+# 持仓但不再第一：若新第一满足趋势过滤，则直接换仓。
+
 # 初始化函数，设定基准等等
 def initialize(context):
     # 设定沪深300作为基准
@@ -63,7 +75,7 @@ def after_code_changed(context):
 
 def my_trade(context):
     
-    N=21     # N日前收盘价的涨幅
+    N=21     # 动量回看窗口（交易日）
 
     # 该list用于存放计算出来的结果,并按动量排序
     SEC_LIST=[]
@@ -72,6 +84,7 @@ def my_trade(context):
     
     curr_data = get_current_data()
     
+    # 遍历标的池，计算每只ETF的动量分数
     for security in g.stocks:
         close_data1 = attribute_history(security, 30, unit='1d', fields=['close'])['close']    # 不包含当天数据
         #log.debug(close_data1)
@@ -79,8 +92,10 @@ def my_trade(context):
         curr_price = curr_data[security].last_price    # 当前价
         #his_n_price = close_data1[-N]                  # 特定的一个历史价
         #his_n_price = (sum(close_data1[-(N-1):])+curr_price)/N      # N日均线
+        # 用“21日前的3日均价”作为对比基准，降低单日极值影响
         his_n_price = sum(close_data1[-23:-20])/3      # 21日前3日均线
         
+        # 任一标的数据异常时直接退出当日交易，避免在坏数据上做决策
         if curr_price!=curr_price or his_n_price!=his_n_price or curr_price<0.01 or his_n_price<0.01:
             log.warning("未取到[%s]分钟级数据,直接退出！！！" % (curr_data[security].name))
             return
@@ -88,20 +103,26 @@ def my_trade(context):
 
         #R = (curr_price - his_n_price)*100/his_n_price         # 当前价较前N日前价格的涨幅
         # 用一天的价格进行判断，有时候一天涨跌太大，导致频繁换仓适得其反，用近3日均价跟21日前3日均价的涨幅来pa稍微平滑一点
+        # 动量分数：近3日均价相对21日前3日均价的涨幅（百分比）
         R = (close_data1[-2]+close_data1[-1]+curr_price-sum(close_data1[-23:-20]))*100/sum(close_data1[-23:-20])    
         
         base_price = close_data1[-N]                  # 特定的一个历史价，也也可以换为MA均线
 
         # 回测偶尔有遇到到R结果一致的情况，导致排序出错，如果有重复的加一个随机数
+        # 分数完全相同会影响排序稳定性，加入极小随机扰动打破平分
         if R in R_LIST:
             R = R + random.random()/1000
         R_LIST.append(R)
         SEC_LIST.append((R,security,curr_price,base_price))
 
     # 将ETF进行排序
+    # 按动量从高到低排序，取第一名作为候选持仓
     SEC_LIST.sort(reverse=True)
     ETF_No1 = SEC_LIST[0][1]
     
+    # 状态机：
+    # STATUS=0 空仓；STATUS=1 持仓
+    # 只持有动量第一且通过趋势过滤的ETF
     if g.position['STATUS']==0:
         # 大于历史价才买进
         if SEC_LIST[0][2] > SEC_LIST[0][3]*1.001:
@@ -118,8 +139,10 @@ def my_trade(context):
                 g.position['STATUS'] = 0
                 g.position['ETF_HOLD'] = ' '
             else:
+                # 仍为第一且趋势未破坏，继续持有
                 log.info("持仓%s排名第一，继续持仓" % g.position['ETF_HOLD'])
         else:
+            # 原持仓不再第一：若新第一通过过滤则换仓
             if SEC_LIST[0][2] > SEC_LIST[0][3]*1.001:
                 order_target_value(g.position['ETF_HOLD'], 0)
                 order_target_value(ETF_No1, context.portfolio.cash)

@@ -40,16 +40,21 @@ def initialize(context):
 
     
 def MOM(etf):
+    # 取最近m_days日收盘价，使用对数价格拟合趋势
     df = attribute_history(etf, g.m_days, '1d', ['close'])
     y = np.log(df['close'].values)
     n = len(y)  
     x = np.arange(n)
-    weights = np.linspace(1,2, n)  # 线性增加权重
+    # 线性递增权重：越近的价格权重越高
+    weights = np.linspace(1,2, n)
     slope, intercept = np.polyfit(x, y, 1, w=weights)
+    # 由斜率推导年化收益（近似250个交易日）
     annualized_returns = math.pow(math.exp(slope), 250) - 1
     residuals = y - (slope * x + intercept)
     weighted_residuals = weights * residuals**2
+    # 趋势拟合优度，越接近1代表趋势越平滑、线性特征越强
     r_squared = 1 - (np.sum(weighted_residuals) / np.sum(weights * (y - np.mean(y))**2))
+    # 最终动量分：收益强度 * 趋势质量
     score = annualized_returns * r_squared
     return score
 
@@ -60,34 +65,41 @@ def get_rank(etf_pool):
         score = MOM(etf)
         score_list.append(score)
     df = pd.DataFrame(index=etf_pool, data={'score':score_list})
+    # 分数从高到低排序
     df = df.sort_values(by='score', ascending=False)
     #total_score = df['score'].sum() 不告诉你这个怎么用
-    df = df[(df['score'] > 0) & (df['score'] <= 5)] #安全区间，动量过高过低都不好
+    # 安全区间过滤：过弱（<=0）或过热（>5）的标的不参与本轮
+    df = df[(df['score'] > 0) & (df['score'] <= 5)]
     rank_list = list(df.index)
     if len(rank_list) == 0:
-        rank_list=["511880.XSHG"] #如果全部都小于0，那么空仓或者买《国债、银华日历、黄金》避险
+        # 若全部不满足条件，切换到低波动避险ETF
+        rank_list=["511880.XSHG"]
     return rank_list
 
 # 交易
 def trade(context):
-    # 获取动量最高的一只ETF
+    # 只持有动量最高的一只ETF（单持仓轮动）
     target_num = 1  
     target_list = get_rank(g.etf_pool)[:target_num]
     # 卖出    
     hold_list = list(context.portfolio.positions)
     for etf in hold_list:
         if etf not in target_list:
+            # 当前持仓不在目标列表中，清仓
             order_target_value(etf, 0)
             print('卖出' + str(etf))
         else:
+            # 仍在目标列表中，继续持有
             print('继续持有' + str(etf))
             pass
     # 买入
     hold_list = list(context.portfolio.positions)
     if len(hold_list) < target_num:
+        # 按目标持仓数量等权分配可用现金
         value = context.portfolio.available_cash / (target_num - len(hold_list))
         for etf in target_list:
             if context.portfolio.positions[etf].total_amount == 0:
+                # 仅对当前未持有的目标标的下单
                 order_target_value(etf, value)
                 print('买入' + str(etf))
 

@@ -31,7 +31,7 @@ pulasi.py — ETF 动量轮动（「普拉斯」版）策略说明
 import numpy as np
 import math
 import pandas as pd
-# from jqdata import *
+from jqdata import *
 # from jqdatasdk import *
 # auth('13126893280','Yq5582037')
 from datetime import datetime, date, timedelta
@@ -50,6 +50,8 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001, open_commission=0,
                               close_commission=0.0001, close_today_commission=0.0001,
                               min_commission=5), type="fund")  # 设置交易费用
+
+    # set_order_cost(OrderCost(close_tax=0.001, open_commission=0.0003, close_commission=0.0003, min_commission=5), type='fund')  
     # 日志级别配置
     log.set_level('order', 'error')
     log.set_level('system', 'error')
