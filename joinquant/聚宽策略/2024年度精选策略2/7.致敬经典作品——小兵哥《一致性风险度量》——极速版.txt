@@ -139,13 +139,6 @@ def rebalance(context):
 
 
 def fun_calc_trade_ratio(context):
-    # type: (Context) -> dict
-    # def __fun_calc_stockWeight(stock_list):
-    #     __ratio = {}
-    #     for stock in stock_list:
-    #         __ratio[stock] = 1 / len(stock_list)
-    # 
-    #     return __ratio
 
     def __fun_getdailyreturn(stock, freq, lag):
         # type: (str, str, int) -> np.ndarray
@@ -189,19 +182,6 @@ def fun_calc_trade_ratio(context):
 
         return ES
 
-    # def __fun_calc_stock_risk_VaR(stock_list):
-    #     __portfolio_VaR = 0
-    #     # __stock_ratio = g.QuantLib.fun_calc_stockWeight(stock_list)
-    #     __stock_ratio = {}
-    #     if stock_list:
-    #         __stock_ratio[stock_list[0]] = 1
-    #         daily_returns = __fun_getdailyreturn(stock_list[0], '1d', 120)
-    #         __portfolio_VaR = 1 * g.confidence_level * np.std(daily_returns)
-    # 
-    #         if math.isnan(__portfolio_VaR):
-    #             __portfolio_VaR = 0
-    # 
-    #     return __portfolio_VaR, __stock_ratio
 
     def __fun_calc_stock_risk_ES(stock_list):
         # type: (list) -> (float, dict)
@@ -381,15 +361,7 @@ class QuantLib(object):
         # self.fun_setCommission(context, stock)
         order_target_value(stock, value)
         self.fun_record(context, stock)
-
-    # def fun_setCommission(self, context, stock):
-    #     if stock in g.equity or stock in g.commodities:
-    #         set_commission(PerTrade(buy_cost=0.0003, sell_cost=0.0003, min_cost=5))
-    #     elif (stock in g.money_fund) or (stock in g.bonds):
-    #         set_commission(PerTrade(buy_cost=0.0000, sell_cost=0.0000, min_cost=0))
-    #     else:
-    #         set_commission(PerTrade(buy_cost=0.0003, sell_cost=0.0013, min_cost=5))
-
+        
     def fun_record(self, context, stock):
         # type: (Context, str) -> NoReturn
         tmpDict = g.transactionRecord.copy()
